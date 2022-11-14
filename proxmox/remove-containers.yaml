@@ -1,4 +1,4 @@
-- name: 'Deploy containers'
+- name: 'Stop and remove containers'
 
   hosts: 'local'
   connection: local
