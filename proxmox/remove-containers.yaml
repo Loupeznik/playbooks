@@ -1,0 +1,58 @@
+- name: 'Deploy containers'
+
+  hosts: 'local'
+  connection: local
+  tasks:
+  - name: 'Stop container 1'
+    community.general.proxmox:
+      vmid: 1000
+      api_user: 'ansible@pam'
+      api_token_id: 'ans_001'
+      api_token_secret: 'f1af111d-a6d3-4c81-b8d2-042fde52b5ce'
+      api_host: '172.16.1.10'
+      state: 'stopped'
+
+  - name: 'Stop container 2'
+    community.general.proxmox:
+      vmid: 1001
+      api_user: 'ansible@pam'
+      api_token_id: 'ans_001'
+      api_token_secret: 'f1af111d-a6d3-4c81-b8d2-042fde52b5ce'
+      api_host: '172.16.1.10'
+      state: 'stopped'
+
+  - name: 'Stop container 3'
+    community.general.proxmox:
+      vmid: 1002
+      api_user: 'ansible@pam'
+      api_token_id: 'ans_001'
+      api_token_secret: 'f1af111d-a6d3-4c81-b8d2-042fde52b5ce'
+      api_host: '172.16.1.10'
+      state: 'stopped'
+
+  - name: 'Remove container 1'
+    community.general.proxmox:
+      vmid: 1000
+      api_user: 'ansible@pam'
+      api_token_id: 'ans_001'
+      api_token_secret: 'f1af111d-a6d3-4c81-b8d2-042fde52b5ce'
+      api_host: '172.16.1.10'
+      state: 'absent'
+
+  - name: 'Remove container 2'
+    community.general.proxmox:
+      vmid: 1001
+      api_user: 'ansible@pam'
+      api_token_id: 'ans_001'
+      api_token_secret: 'f1af111d-a6d3-4c81-b8d2-042fde52b5ce'
+      api_host: '172.16.1.10'
+      state: 'absent'
+
+  - name: 'Remove container 3'
+    community.general.proxmox:
+      vmid: 1002
+      api_user: 'ansible@pam'
+      api_token_id: 'ans_001'
+      api_token_secret: 'f1af111d-a6d3-4c81-b8d2-042fde52b5ce'
+      api_host: '172.16.1.10'
+      state: 'absent'
