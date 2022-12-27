@@ -1,0 +1,36 @@
+- name: 'Add custom apt repo'
+
+  hosts: 'proxmox-ubuntu-cts-lead'
+  become: true
+  become_user: root
+  tasks:
+    - name: 'Install required software'
+      ansible.builtin.apt:
+        pkg:
+          - curl
+          - gpg
+        update_cache: true
+
+    - name: 'Update ca-certificates utility'
+      ansible.builtin.apt:
+        name: ca-certificates
+        state: latest
+
+    - name: 'Download GPG key'
+      ansible.builtin.shell: |
+        curl -fsSL https://apt.dzarsky.eu/apt-repo-dzarsky.gpg | gpg --dearmor > /etc/apt/trusted.gpg.d/apt-repo-dzarsky.gpg
+      args:
+        executable: /bin/bash
+        creates: '/etc/apt/trusted.gpg.d/apt-repo-dzarsky.gpg'
+
+    - name: 'Add repo'
+      ansible.builtin.shell: |
+        echo "deb [arch=amd64 signed-by=/etc/apt/trusted.gpg.d/apt-repo-dzarsky.gpg] https://apt.dzarsky.eu /" > /etc/apt/sources.list.d/apt-repo-dzarsky.list
+      args:
+        executable: /bin/bash
+        creates: '/etc/apt/sources.list.d/apt-repo-dzarsky.list'
+
+    - name: Run apt update
+      ansible.builtin.apt:
+        update_cache: true
+      register: apt_update_output
