@@ -1,6 +1,6 @@
 - name: 'Deploy Jenkins'
 
-  hosts: 'proxmox-ubuntu-cts-slaves'
+  hosts: 'proxmox-ubuntu-cts-lead'
   tasks:
     - name: 'Update all packages'
       ansible.builtin.apt:
