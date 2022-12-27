@@ -1,0 +1,36 @@
+- name: 'Deploy Jenkins'
+
+  hosts: 'proxmox-ubuntu-cts-slaves'
+  tasks:
+    - name: 'Update all packages'
+      ansible.builtin.apt:
+        name: '*'
+        state: latest
+        update_cache: true
+
+    - name: 'Install dependencies'
+      ansible.builtin.apt:
+        pkg:
+          - curl
+          - fontconfig
+          - openjdk-11-jre
+        update_cache: true
+
+    - name: 'Add Jenkins repository'
+      ansible.builtin.shell: |
+        curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io.key | sudo tee /usr/share/keyrings/jenkins-keyring.asc > /dev/null
+        echo deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/ | \
+        tee /etc/apt/sources.list.d/jenkins.list > /dev/null
+      args:
+        executable: /bin/bash
+
+    - name: 'Install Jenkins'
+      ansible.builtin.apt:
+        name: jenkins
+        update_cache: true
+
+    - name: 'Start Jenkins'
+      ansible.builtin.service:
+        name: jenkins
+        state: started
+        enabled: true
