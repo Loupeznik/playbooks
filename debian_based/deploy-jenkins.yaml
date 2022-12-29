@@ -35,3 +35,13 @@
         name: jenkins
         state: started
         enabled: true
+
+    - name: 'Read the initial admin password file'
+      ansible.builtin.shell: |
+        cat /var/lib/jenkins/secrets/initialAdminPassword
+      register: password
+      changed_when: password.rc != 0
+
+    - name: 'Print the password'
+      ansible.builtin.debug:
+        msg: 'Finish the setup at http://{{ ansible_default_ipv4.address }}:8080 with password {{ password.stdout }}'
