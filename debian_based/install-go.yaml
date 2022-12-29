@@ -1,0 +1,17 @@
+- name: 'Deploy Jenkins'
+
+  hosts: 'proxmox-ubuntu-cts-lead'
+  tasks:
+    - name: 'Install dependency'
+      ansible.builtin.apt:
+        name: software-properties-common
+        update_cache: true
+
+    - name: 'Add Golang repository'
+      ansible.builtin.apt_repository:
+        repo: ppa:longsleep/golang-backports
+
+    - name: 'Install Go'
+      ansible.builtin.apt:
+        name: golang-go
+        update_cache: true
