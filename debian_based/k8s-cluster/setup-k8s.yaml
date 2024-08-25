@@ -1,0 +1,126 @@
+- name: "Setup k8s cluster"
+
+  hosts: "k8s_vms"
+  become: true
+  become_user: root
+
+  tasks:
+    - name: "Update all packages"
+      ansible.builtin.apt:
+        name: "*"
+        state: latest
+        update_cache: true
+
+    - name: "Install dependencies"
+      ansible.builtin.apt:
+        pkg:
+          - curl
+          - ca-certificates
+          - git
+          - gnupg
+          - wget
+          - apt-transport-https
+          - software-properties-common
+          - sed
+        update_cache: true
+
+    - name: "Add Docker repository"
+      ansible.builtin.shell: |
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+        chmod a+r /etc/apt/keyrings/docker.gpg
+        echo \
+          "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian \
+          $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+          tee /etc/apt/sources.list.d/docker.list > /dev/null
+      args:
+        executable: /bin/bash
+
+    - name: "Install Docker"
+      ansible.builtin.apt:
+        pkg:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        update_cache: true
+
+    - name: "Add Kubernetes repository and dependencies"
+      ansible.builtin.shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.31/deb/ /' | tee /etc/apt/sources.list.d/kubernetes.list
+        wget https://github.com/Mirantis/cri-dockerd/releases/download/v0.3.14/cri-dockerd_0.3.14.3-0.debian-bookworm_amd64.deb
+        dpkg -i cri-dockerd_0.3.14.3-0.debian-bookworm_amd64.deb
+        rm cri-dockerd_0.3.14.3-0.debian-bookworm_amd64.deb
+      args:
+        executable: /bin/bash
+
+    - name: "Install kube tools"
+      ansible.builtin.apt:
+        pkg:
+          - kubelet
+          - kubeadm
+          - kubectl
+        update_cache: true
+
+    - name: "Finish setup"
+      ansible.builtin.shell: |
+        swapoff -a
+        systemctl enable kubelet
+      args:
+        executable: /bin/bash
+
+    - name: "Setup master node"
+      ansible.builtin.shell: |
+        kubeadm init --pod-network-cidr=10.0.0.0/16 --cri-socket unix:///var/run/cri-dockerd.sock
+        mkdir -p $HOME/.kube
+        cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+        chown $(id -u):$(id -g) $HOME/.kube/config
+      args:
+        executable: /bin/bash
+      when: inventory_hostname == 'k8s-sbx-01'
+
+    - name: "Create join token"
+      ansible.builtin.shell: |
+        kubeadm token create --print-join-command
+      register: kubeadm_init
+      when: inventory_hostname == 'k8s-sbx-01'
+
+    - name: "Set join command fact"
+      ansible.builtin.set_fact:
+        join_command: "{{ kubeadm_init.stdout_lines[0] }}"
+      when: inventory_hostname == 'k8s-sbx-01'
+
+    - name: "Add networking addon"
+      ansible.builtin.shell: |
+        kubectl create -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.1/manifests/tigera-operator.yaml
+        wget https://raw.githubusercontent.com/projectcalico/calico/v3.28.1/manifests/custom-resources.yaml
+        sed -i 's/cidr: 192\.168\.0\.0\/16/cidr: 10\.0\.0\.0\/16/g' custom-resources.yaml
+        kubectl apply -f custom-resources.yaml
+        curl -L https://github.com/projectcalico/calico/releases/download/v3.28.1/calicoctl-linux-amd64 -o kubectl-calico
+        chmod +x kubectl-calico
+        mv kubectl-calico /usr/local/bin/
+      when: inventory_hostname == 'k8s-sbx-01'
+
+    - name: "Install Longhorn dependencies"
+      ansible.builtin.apt:
+        pkg:
+          - open-iscsi
+          - nfs-common
+          - cryptsetup
+        update_cache: true
+
+    - name: "Add storage"
+      ansible.builtin.shell: |
+        kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/v1.7.0/deploy/prerequisite/longhorn-iscsi-installation.yaml
+        kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/v1.7.0/deploy/prerequisite/longhorn-nfs-installation.yaml
+        kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/v1.7.0/deploy/longhorn.yaml
+      when: inventory_hostname == 'k8s-sbx-01'
+
+    - name: "Join worker nodes"
+      ansible.builtin.shell: |
+        {{ hostvars['k8s-sbx-01'].join_command }} --cri-socket unix:///var/run/cri-dockerd.sock
+      args:
+        executable: /bin/bash
+      when: inventory_hostname != 'k8s-sbx-01'

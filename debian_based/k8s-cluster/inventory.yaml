@@ -1,0 +1,11 @@
+k8s_vms:
+  hosts:
+    k8s-sbx-01:
+      ansible_host: 192.168.0.54
+      ansible_user: svc_cloudinit
+      ansible_ssh_private_key_file: ~/.ssh/k8s_sbx_id_rsa
+
+    k8s-sbx-02:
+      ansible_host: 192.168.0.55
+      ansible_user: svc_cloudinit
+      ansible_ssh_private_key_file: ~/.ssh/k8s_sbx_id_rsa
