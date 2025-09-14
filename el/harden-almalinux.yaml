@@ -1,0 +1,226 @@
+---
+- name: Harden AlmaLinux 9 Server
+  hosts: almalinux_servers
+  become: yes
+
+  vars:
+    admin_username: "ccadmin"
+    admin_public_keys:
+      - "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCsrL... your_personal_key_1"
+      - "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCqL... your_team_key_2"
+
+    new_ssh_port: 2222
+    allowed_ssh_ips:
+      - "192.168.1.100/32"
+      - "10.0.0.0/8"
+
+    required_tcp_ports:
+      - 80/tcp
+      - 443/tcp
+
+  tasks:
+    - name: Ensure DNF cache is up to date and upgrade all packages
+      dnf:
+        state: latest
+        name: "*"
+        update_cache: yes
+        security: yes
+        nobest: yes
+        skip_broken: yes
+
+    - name: Create a new non-root administrative user
+      ansible.builtin.user:
+        name: "{{ admin_username }}"
+        state: present
+        groups: wheel
+        append: yes
+        create_home: yes
+        shell: /bin/bash
+
+    - name: Add SSH public keys for the administrative user
+      ansible.posix.authorized_key:
+        user: "{{ admin_username }}"
+        key: "{{ item }}"
+        state: present
+      with_items: "{{ admin_public_keys }}"
+      loop_control:
+        label: "Adding key for {{ admin_username }}"
+
+    - name: Ensure firewalld is installed and running
+      ansible.builtin.systemd:
+        name: firewalld
+        state: started
+        enabled: yes
+
+    - name: Get current active zones for network interfaces
+      ansible.builtin.command: firewall-cmd --get-active-zones
+      register: active_zones_output
+      changed_when: false
+
+    - name: Set target zone for firewall rules (e.g., public, or determine dynamically)
+      ansible.builtin.set_fact:
+        target_zone: "{{ (active_zones_output.stdout.splitlines() | select('match', '^\\S+\\s*\\(active\\)$') | map('regex_replace', '\\s*\\(active\\)', '') | list)[0] | default('public') }}"
+
+    - name: Remove existing SSH service rule from the target zone (if it exists)
+      ansible.builtin.firewalld:
+        service: ssh
+        zone: "{{ target_zone }}"
+        state: disabled
+        permanent: yes
+      ignore_errors: yes # Ignore if the service wasn't there
+
+    - name: Allow SSH traffic from specific IP addresses only on the new port
+      ansible.builtin.firewalld:
+        rich_rule: "rule family='ipv4' source address='{{ item }}' port port='{{ new_ssh_port }}' protocol='tcp' accept"
+        zone: "{{ target_zone }}"
+        state: enabled
+        permanent: yes
+      with_items: "{{ allowed_ssh_ips }}"
+      notify: Reload firewalld
+
+    - name: Open other required TCP ports
+      ansible.builtin.firewalld:
+        port: "{{ item }}"
+        zone: "{{ target_zone }}"
+        state: enabled
+        permanent: yes
+      with_items: "{{ required_tcp_ports }}"
+      notify: Reload firewalld
+
+    - name: Configure SSH to disable password authentication
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PasswordAuthentication '
+        line: 'PasswordAuthentication no'
+        state: present
+        backup: yes
+      notify: Restart sshd
+
+    - name: Configure SSH to disable root login
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PermitRootLogin '
+        line: 'PermitRootLogin no'
+        state: present
+        backup: yes
+      notify: Restart sshd
+
+    - name: Configure SSH to change default port
+      ansible.builtin.lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?Port '
+        line: 'Port {{ new_ssh_port }}'
+        state: present
+        backup: yes
+      notify: Restart sshd
+
+    - name: Install Fail2Ban
+      ansible.builtin.dnf:
+        name: fail2ban
+        state: present
+
+    - name: Copy Fail2Ban default jail configuration to local override
+      ansible.builtin.copy:
+        src: /etc/fail2ban/jail.conf
+        dest: /etc/fail2ban/jail.local
+        remote_src: yes # Source is on the remote machine
+        force: no # Only copy if jail.local doesn't exist
+      # This ensures we don't overwrite user-specific changes if it exists already
+
+    - name: Enable SSH jail in Fail2Ban local configuration
+      ansible.builtin.lineinfile:
+        path: /etc/fail2ban/jail.local
+        regexp: '^enabled = false'
+        line: 'enabled = true'
+        insertafter: '^[sshd]$' # Ensure it's under the sshd section
+        state: present
+      notify: Restart fail2ban
+
+    - name: Ensure Fail2Ban service is enabled and started
+      ansible.builtin.systemd:
+        name: fail2ban
+        state: started
+        enabled: yes
+
+    - name: Ensure SELinux is in enforcing mode
+      ansible.builtin.selinux:
+        policy: targeted
+        state: enforcing
+
+    - name: Install dnf-automatic for automated updates
+      ansible.builtin.dnf:
+        name: dnf-automatic
+        state: present
+
+    - name: Configure dnf-automatic to apply security updates automatically
+      ansible.builtin.lineinfile:
+        path: /etc/dnf/automatic.conf
+        regexp: '^apply_updates = '
+        line: 'apply_updates = yes'
+        state: present
+      notify: Restart dnf-automatic timer
+
+    - name: Enable and start dnf-automatic timer
+      ansible.builtin.systemd:
+        name: dnf-automatic.timer
+        state: started
+        enabled: yes
+
+    - name: Install AIDE (Advanced Intrusion Detection Environment)
+      ansible.builtin.dnf:
+        name: aide
+        state: present
+
+    - name: Initialize AIDE database
+      ansible.builtin.command: "aide --init"
+      args:
+        creates: "/var/lib/aide/aide.db.new.gz" # Only run if this file doesn't exist
+
+    - name: Move AIDE new database to active database
+      ansible.builtin.copy:
+        src: "/var/lib/aide/aide.db.new.gz"
+        dest: "/var/lib/aide/aide.db.gz"
+        remote_src: yes
+        force: yes # Overwrite the old one if it exists
+
+    - name: Add AIDE check to daily cron
+      ansible.builtin.cron:
+        name: "Run AIDE daily check"
+        minute: "0"
+        hour: "3"
+        job: "/usr/sbin/aide --check > /var/log/aide_check.log 2>&1 || true"
+        user: root
+        state: present
+      # The '|| true' is to prevent cron from sending email on non-zero exit codes (AIDE exits non-zero if changes are found)
+
+    - name: Configure /tmp, /var/tmp, and /dev/shm mount options in /etc/fstab
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        regexp: '^(.*? /tmp .*?)(defaults)(\s.*)$'
+        line: '\1defaults,noexec,nosuid,nodev\3'
+        backrefs: yes
+        state: present
+      # This task adds the specified options to existing /tmp entry
+      # Similar tasks would be needed for /var/tmp and /dev/shm if they are separate mounts.
+      # Note: This requires a reboot to take full effect.
+
+  handlers:
+    - name: Reload firewalld
+      ansible.builtin.systemd:
+        name: firewalld
+        state: reloaded
+
+    - name: Restart sshd
+      ansible.builtin.systemd:
+        name: sshd
+        state: restarted
+
+    - name: Restart fail2ban
+      ansible.builtin.systemd:
+        name: fail2ban
+        state: restarted
+
+    - name: Restart dnf-automatic timer
+      ansible.builtin.systemd:
+        name: dnf-automatic.timer
+        state: restarted
