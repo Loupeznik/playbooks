@@ -17,8 +17,15 @@
         state: latest
 
     - name: 'Download GPG key'
+      ansible.builtin.get_url:
+        url: https://apt.dzarsky.eu/apt-repo-dzarsky.gpg
+        dest: /tmp/apt-repo-dzarsky.gpg
+        mode: '0644'
+
+    - name: 'Dearmor GPG key'
       ansible.builtin.shell: |
-        curl -fsSL https://apt.dzarsky.eu/apt-repo-dzarsky.gpg | gpg --dearmor > /etc/apt/trusted.gpg.d/apt-repo-dzarsky.gpg
+        set -o pipefail
+        gpg --dearmor < /tmp/apt-repo-dzarsky.gpg > /etc/apt/trusted.gpg.d/apt-repo-dzarsky.gpg
       args:
         executable: /bin/bash
         creates: '/etc/apt/trusted.gpg.d/apt-repo-dzarsky.gpg'

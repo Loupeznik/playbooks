@@ -17,13 +17,17 @@
           - git
         update_cache: true
 
+    - name: 'Download Jenkins GPG key'
+      ansible.builtin.get_url:
+        url: https://pkg.jenkins.io/debian-stable/jenkins.io.key
+        dest: /usr/share/keyrings/jenkins-keyring.asc
+        mode: '0644'
+
     - name: 'Add Jenkins repository'
-      ansible.builtin.shell: |
-        curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io.key | sudo tee /usr/share/keyrings/jenkins-keyring.asc > /dev/null
-        echo deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/ | \
-        tee /etc/apt/sources.list.d/jenkins.list > /dev/null
-      args:
-        executable: /bin/bash
+      ansible.builtin.copy:
+        content: "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/"
+        dest: /etc/apt/sources.list.d/jenkins.list
+        mode: '0644'
 
     - name: 'Install Jenkins'
       ansible.builtin.apt:
@@ -37,11 +41,10 @@
         enabled: true
 
     - name: 'Read the initial admin password file'
-      ansible.builtin.shell: |
-        cat /var/lib/jenkins/secrets/initialAdminPassword
+      ansible.builtin.slurp:
+        src: /var/lib/jenkins/secrets/initialAdminPassword
       register: password
-      changed_when: password.rc != 0
 
     - name: 'Print the password'
       ansible.builtin.debug:
-        msg: 'Finish the setup at http://{{ ansible_default_ipv4.address }}:8080 with password {{ password.stdout }}'
+        msg: 'Finish the setup at http://{{ ansible_default_ipv4.address }}:8080 with password {{ password.content | b64decode | trim }}'
