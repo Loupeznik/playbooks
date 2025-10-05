@@ -1,0 +1,97 @@
+- name: 'Setup Azure Pipelines Agent'
+
+  hosts: 'azure_agents'
+  become: true
+  become_user: root
+
+  vars:
+    azure_devops_url: "{{ azure_devops_org_url }}"
+    azure_devops_token: "{{ azure_devops_pat }}"
+    agent_pool: "{{ azure_agent_pool }}"
+    agent_name: "{{ azure_agent_name | default(ansible_hostname) }}"
+    agent_user: "{{ azure_agent_user | default('azpagent') }}"
+    agent_version: "4.263.0"
+    agent_dir: "{{ azure_agent_dir | default('/opt/ci/azp/' + (azure_agent_name | default(ansible_hostname))) }}"
+
+  tasks:
+    - name: 'Update all packages'
+      ansible.builtin.apt:
+        name: '*'
+        state: latest
+        update_cache: true
+
+    - name: 'Install dependencies'
+      ansible.builtin.apt:
+        pkg:
+          - curl
+          - git
+          - jq
+          - libicu-dev
+          - ca-certificates
+        update_cache: true
+
+    - name: 'Create agent user'
+      ansible.builtin.user:
+        name: "{{ agent_user }}"
+        shell: /bin/bash
+        create_home: true
+        system: true
+        groups: docker
+        append: true
+
+    - name: 'Create agent directory'
+      ansible.builtin.file:
+        path: "{{ agent_dir }}"
+        state: directory
+        owner: "{{ agent_user }}"
+        group: "{{ agent_user }}"
+        mode: '0755'
+
+    - name: 'Download Azure Pipelines agent'
+      ansible.builtin.get_url:
+        url: "https://download.agent.dev.azure.com/agent/{{ agent_version }}/vsts-agent-linux-x64-{{ agent_version }}.tar.gz"
+        dest: "/tmp/vsts-agent-linux-x64-{{ agent_version }}.tar.gz"
+        mode: '0644'
+
+    - name: 'Extract agent archive'
+      ansible.builtin.unarchive:
+        src: "/tmp/vsts-agent-linux-x64-{{ agent_version }}.tar.gz"
+        dest: "{{ agent_dir }}"
+        remote_src: true
+        owner: "{{ agent_user }}"
+        group: "{{ agent_user }}"
+
+    - name: 'Configure agent'
+      ansible.builtin.shell: |
+        ./config.sh --unattended \
+          --url "{{ azure_devops_url }}" \
+          --auth pat \
+          --token "{{ azure_devops_token }}" \
+          --pool "{{ agent_pool }}" \
+          --agent "{{ agent_name }}" \
+          --acceptTeeEula \
+          --replace
+      args:
+        chdir: "{{ agent_dir }}"
+        executable: /bin/bash
+      become: true
+      become_user: "{{ agent_user }}"
+
+    - name: 'Install agent service'
+      ansible.builtin.shell: |
+        ./svc.sh install {{ agent_user }}
+      args:
+        chdir: "{{ agent_dir }}"
+        executable: /bin/bash
+
+    - name: 'Start agent service'
+      ansible.builtin.shell: |
+        ./svc.sh start
+      args:
+        chdir: "{{ agent_dir }}"
+        executable: /bin/bash
+
+    - name: 'Cleanup downloaded archive'
+      ansible.builtin.file:
+        path: "/tmp/vsts-agent-linux-x64-{{ agent_version }}.tar.gz"
+        state: absent
