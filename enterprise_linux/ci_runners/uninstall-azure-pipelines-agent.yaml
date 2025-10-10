@@ -1,0 +1,59 @@
+- name: 'Uninstall Azure Pipelines Agent'
+
+  hosts: 'azure_agents'
+  become: true
+  become_user: root
+
+  vars:
+    agent_name: "{{ azure_agent_name | default(ansible_hostname) }}"
+    agent_user: "{{ azure_agent_user | default('azpagent') }}"
+    agent_dir: "{{ azure_agent_dir | default('/opt/ci/azp/' + (azure_agent_name | default(ansible_hostname))) }}"
+    remove_user: "{{ azure_remove_user | default(false) }}"
+
+  tasks:
+    - name: 'Check if agent directory exists'
+      ansible.builtin.stat:
+        path: "{{ agent_dir }}"
+      register: agent_dir_stat
+
+    - name: 'Stop agent service'
+      ansible.builtin.shell: |
+        ./svc.sh stop
+      args:
+        chdir: "{{ agent_dir }}"
+        executable: /bin/bash
+      when: agent_dir_stat.stat.exists
+      ignore_errors: true
+
+    - name: 'Uninstall agent service'
+      ansible.builtin.shell: |
+        ./svc.sh uninstall
+      args:
+        chdir: "{{ agent_dir }}"
+        executable: /bin/bash
+      when: agent_dir_stat.stat.exists
+      ignore_errors: true
+
+    - name: 'Unconfigure agent'
+      ansible.builtin.shell: |
+        ./config.sh remove --auth pat --token "{{ azure_devops_pat }}"
+      args:
+        chdir: "{{ agent_dir }}"
+        executable: /bin/bash
+      become: true
+      become_user: "{{ agent_user }}"
+      when: agent_dir_stat.stat.exists and azure_devops_pat is defined
+      ignore_errors: true
+
+    - name: 'Remove agent directory'
+      ansible.builtin.file:
+        path: "{{ agent_dir }}"
+        state: absent
+      when: agent_dir_stat.stat.exists
+
+    - name: 'Remove agent user'
+      ansible.builtin.user:
+        name: "{{ agent_user }}"
+        state: absent
+        remove: true
+      when: remove_user | bool

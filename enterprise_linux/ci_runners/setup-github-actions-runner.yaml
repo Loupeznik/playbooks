@@ -16,21 +16,29 @@
 
   tasks:
     - name: 'Update all packages'
-      ansible.builtin.apt:
+      ansible.builtin.dnf:
         name: '*'
         state: latest
         update_cache: true
 
+    - name: 'Install EPEL repository'
+      ansible.builtin.dnf:
+        name: epel-release
+        state: present
+
     - name: 'Install dependencies'
-      ansible.builtin.apt:
-        pkg:
+      ansible.builtin.dnf:
+        name:
           - curl
           - git
           - jq
-          - libicu-dev
-          - ca-certificates
           - tar
-        update_cache: true
+          - ca-certificates
+          - libicu
+          - krb5-libs
+          - zlib
+          - openssl-libs
+        state: present
 
     - name: 'Create runner user'
       ansible.builtin.user:

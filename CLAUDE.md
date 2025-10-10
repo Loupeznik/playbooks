@@ -12,6 +12,9 @@ This repository contains Ansible playbooks for infrastructure automation across 
   - Basic server setup (Docker, ZSH, user creation)
   - Application deployments (nginx, Jenkins, Go)
   - **k8s-cluster/** - Complete Kubernetes cluster setup
+  - **ci_runners/** - CI/CD runner setup (GitHub Actions, Azure Pipelines)
+- **enterprise_linux/** - Playbooks for RHEL-based systems (AlmaLinux, Rocky Linux, CentOS Stream, RHEL)
+  - **ci_runners/** - CI/CD runner setup (Azure Pipelines)
 - **proxmox/** - Playbooks for managing Proxmox VE containers
 
 ## Running Playbooks
@@ -69,6 +72,14 @@ Inventory files should be stored in the `inventories/` directory (gitignored).
 - Use `become: true` and `become_user: root` for privilege escalation
 - Repository keys are stored in `/etc/apt/keyrings/`
 - Package sources in `/etc/apt/sources.list.d/`
+- Use `ansible.builtin.apt` module for package management
+
+### RHEL-based Playbooks
+
+- Use `ansible.builtin.dnf` module for package management
+- Install EPEL repository when needed for additional packages
+- Use `become: true` and `become_user: root` for privilege escalation
+- AlmaLinux, Rocky Linux, CentOS Stream, and RHEL 8+ are supported
 
 ### K8s Cluster Playbook Specifics
 

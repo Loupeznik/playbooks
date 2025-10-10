@@ -1,0 +1,59 @@
+- name: 'Uninstall GitHub Actions Runner'
+
+  hosts: 'github_runners'
+  become: true
+  become_user: root
+
+  vars:
+    runner_name: "{{ github_runner_name | default(ansible_hostname) }}"
+    runner_user: "{{ github_runner_user | default('ghrunner') }}"
+    runner_dir: "{{ github_runner_dir | default('/opt/ci/gh/' + (github_runner_name | default(ansible_hostname))) }}"
+    remove_user: "{{ github_remove_user | default(false) }}"
+
+  tasks:
+    - name: 'Check if runner directory exists'
+      ansible.builtin.stat:
+        path: "{{ runner_dir }}"
+      register: runner_dir_stat
+
+    - name: 'Stop runner service'
+      ansible.builtin.shell: |
+        ./svc.sh stop
+      args:
+        chdir: "{{ runner_dir }}"
+        executable: /bin/bash
+      when: runner_dir_stat.stat.exists
+      ignore_errors: true
+
+    - name: 'Uninstall runner service'
+      ansible.builtin.shell: |
+        ./svc.sh uninstall
+      args:
+        chdir: "{{ runner_dir }}"
+        executable: /bin/bash
+      when: runner_dir_stat.stat.exists
+      ignore_errors: true
+
+    - name: 'Unconfigure runner'
+      ansible.builtin.shell: |
+        ./config.sh remove --token "{{ github_runner_token }}"
+      args:
+        chdir: "{{ runner_dir }}"
+        executable: /bin/bash
+      become: true
+      become_user: "{{ runner_user }}"
+      when: runner_dir_stat.stat.exists and github_runner_token is defined
+      ignore_errors: true
+
+    - name: 'Remove runner directory'
+      ansible.builtin.file:
+        path: "{{ runner_dir }}"
+        state: absent
+      when: runner_dir_stat.stat.exists
+
+    - name: 'Remove runner user'
+      ansible.builtin.user:
+        name: "{{ runner_user }}"
+        state: absent
+        remove: true
+      when: remove_user | bool

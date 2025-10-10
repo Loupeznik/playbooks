@@ -1,6 +1,6 @@
 # Ansible playbooks
 
-Collection of Ansible playbooks for infrastructure automation across Debian-based systems and Proxmox VE.
+Collection of Ansible playbooks for infrastructure automation across Debian-based systems, RHEL-based systems, and Proxmox VE.
 
 ## Requirements
 
@@ -62,6 +62,7 @@ ansible-playbook <playbook-name>.yaml -i inventories/<inventory-file>.yaml
 ## Available Playbooks
 
 - **debian_based/** - Debian/Ubuntu system configuration and application deployments
+- **enterprise_linux/** - RHEL-based system configuration (AlmaLinux, Rocky Linux, CentOS Stream, RHEL)
 - **proxmox/** - Proxmox VE container management
 
 See individual README files in subdirectories for specific playbook details.

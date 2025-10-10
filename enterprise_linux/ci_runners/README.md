@@ -1,12 +1,12 @@
 # CI/CD Runner Setup Playbooks
 
-Playbooks for setting up self-hosted CI/CD runners on Debian-based systems.
+Playbooks for setting up self-hosted CI/CD runners on RHEL-based systems (AlmaLinux, Rocky Linux, CentOS Stream, RHEL).
 
 ## Available Playbooks
 
 ### GitHub Actions Runner (`setup-github-actions-runner.yaml`)
 
-Installs and configures a GitHub Actions self-hosted runner (v2.328.0).
+Installs and configures a GitHub Actions self-hosted runner (v2.328.0) on RHEL-based systems.
 
 **Required variables:**
 - `github_repo_url`: GitHub repository or organization URL (e.g., `https://github.com/yourorg/yourrepo`)
@@ -21,7 +21,7 @@ Installs and configures a GitHub Actions self-hosted runner (v2.328.0).
 
 **Usage:**
 ```bash
-ansible-playbook debian_based/ci_runners/setup-github-actions-runner.yaml \
+ansible-playbook enterprise_linux/ci_runners/setup-github-actions-runner.yaml \
   -i inventories/runners.yaml \
   -e "github_repo_url=https://github.com/yourorg/yourrepo" \
   -e "github_runner_token=YOUR_TOKEN"
@@ -29,7 +29,7 @@ ansible-playbook debian_based/ci_runners/setup-github-actions-runner.yaml \
 
 **Usage with Docker group membership:**
 ```bash
-ansible-playbook debian_based/ci_runners/setup-github-actions-runner.yaml \
+ansible-playbook enterprise_linux/ci_runners/setup-github-actions-runner.yaml \
   -i inventories/runners.yaml \
   -e "github_repo_url=https://github.com/yourorg/yourrepo" \
   -e "github_runner_token=YOUR_TOKEN" \
@@ -38,7 +38,7 @@ ansible-playbook debian_based/ci_runners/setup-github-actions-runner.yaml \
 
 **Uninstall:**
 ```bash
-ansible-playbook debian_based/ci_runners/uninstall-github-actions-runner.yaml \
+ansible-playbook enterprise_linux/ci_runners/uninstall-github-actions-runner.yaml \
   -i inventories/runners.yaml \
   -e "github_runner_token=YOUR_TOKEN"
 ```
@@ -47,7 +47,7 @@ Add `-e "github_remove_user=true"` to also remove the system user.
 
 ### Azure Pipelines Agent (`setup-azure-pipelines-agent.yaml`)
 
-Installs and configures an Azure Pipelines self-hosted agent (v4.263.0).
+Installs and configures an Azure Pipelines self-hosted agent (v4.263.0) on RHEL-based systems.
 
 **Required variables:**
 - `azure_devops_org_url`: Azure DevOps organization URL (e.g., `https://dev.azure.com/yourorg`)
@@ -62,7 +62,7 @@ Installs and configures an Azure Pipelines self-hosted agent (v4.263.0).
 
 **Usage:**
 ```bash
-ansible-playbook debian_based/ci_runners/setup-azure-pipelines-agent.yaml \
+ansible-playbook enterprise_linux/ci_runners/setup-azure-pipelines-agent.yaml \
   -i inventories/runners.yaml \
   -e "azure_devops_org_url=https://dev.azure.com/yourorg" \
   -e "azure_devops_pat=YOUR_PAT" \
@@ -71,7 +71,7 @@ ansible-playbook debian_based/ci_runners/setup-azure-pipelines-agent.yaml \
 
 **Usage with Docker group membership:**
 ```bash
-ansible-playbook debian_based/ci_runners/setup-azure-pipelines-agent.yaml \
+ansible-playbook enterprise_linux/ci_runners/setup-azure-pipelines-agent.yaml \
   -i inventories/runners.yaml \
   -e "azure_devops_org_url=https://dev.azure.com/yourorg" \
   -e "azure_devops_pat=YOUR_PAT" \
@@ -81,7 +81,7 @@ ansible-playbook debian_based/ci_runners/setup-azure-pipelines-agent.yaml \
 
 **Uninstall:**
 ```bash
-ansible-playbook debian_based/ci_runners/uninstall-azure-pipelines-agent.yaml \
+ansible-playbook enterprise_linux/ci_runners/uninstall-azure-pipelines-agent.yaml \
   -i inventories/runners.yaml \
   -e "azure_devops_pat=YOUR_PAT"
 ```
@@ -109,8 +109,9 @@ Add `-e "azure_remove_user=true"` to also remove the system user.
 ## Installation Details
 
 Both playbooks:
-- Update system packages
-- Install dependencies (git, jq, libicu-dev)
+- Update system packages using DNF
+- Install EPEL repository for additional dependencies
+- Install dependencies (git, jq, tar, libicu, krb5-libs)
 - Create dedicated system user
 - Download and extract runner/agent package to `/opt/ci/[azp|gh]/[agent-name]`
 - Configure in unattended mode
@@ -127,3 +128,10 @@ The uninstall playbooks:
 - Unregister from GitHub/Azure DevOps (requires token)
 - Remove installation directory
 - Optionally remove system user (set `[github|azure]_remove_user=true`)
+
+## Requirements
+
+- RHEL-based system (AlmaLinux 8+, Rocky Linux 8+, RHEL 8+, CentOS Stream 8+)
+- Docker installed (if `[github|azure]_[runner|agent]_add_to_docker_group=true`)
+- Internet connectivity for downloading runner/agent packages
+- Sudo/root privileges
