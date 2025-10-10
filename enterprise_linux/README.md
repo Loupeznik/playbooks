@@ -13,6 +13,7 @@ None - all values are configured in the playbook
 
 **What it does:**
 - Updates all system packages
+- Installs EPEL repository
 - Installs essential tools (curl, git, wget, htop, etc.)
 - Installs Docker and Docker Compose
 - Starts and enables Docker service

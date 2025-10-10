@@ -11,6 +11,11 @@
         state: latest
         update_cache: true
 
+    - name: 'Install EPEL repository'
+      ansible.builtin.dnf:
+        name: epel-release
+        state: present
+
     - name: "Install dependencies"
       ansible.builtin.dnf:
         name:
