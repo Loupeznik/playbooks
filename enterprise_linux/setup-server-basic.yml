@@ -1,0 +1,69 @@
+- name: 'Basic RHEL-based server setup'
+
+  hosts: 'servers'
+  become: true
+  become_user: root
+
+  tasks:
+    - name: 'Update all packages'
+      ansible.builtin.dnf:
+        name: '*'
+        state: latest
+        update_cache: true
+
+    - name: "Install dependencies"
+      ansible.builtin.dnf:
+        name:
+          - curl
+          - ca-certificates
+          - git
+          - gnupg2
+          - wget
+          - htop
+          - dnf-plugins-core
+        state: present
+
+    - name: 'Add Docker repository'
+      ansible.builtin.command: dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+      args:
+        creates: /etc/yum.repos.d/docker-ce.repo
+
+    - name: 'Install Docker'
+      ansible.builtin.dnf:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+
+    - name: 'Start and enable Docker service'
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: "Create management user"
+      ansible.builtin.user:
+        append: true
+        shell: /bin/bash
+        groups: docker,wheel
+        name: cc
+        create_home: true
+
+    - name: 'Create .ssh directory'
+      ansible.builtin.file:
+        path: /home/cc/.ssh
+        state: directory
+        mode: '0700'
+        owner: cc
+        group: cc
+
+    - name: 'Setup SSH authorized keys'
+      ansible.builtin.copy:
+        content: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPGpHkdoJOr4anzQ/U7TBmbx5kBr3VDNCLmYnc2W/3Nu"
+        dest: /home/cc/.ssh/authorized_keys
+        mode: '0600'
+        owner: cc
+        group: cc

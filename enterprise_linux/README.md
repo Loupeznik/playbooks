@@ -4,6 +4,30 @@ Playbooks for RHEL-based systems (AlmaLinux, Rocky Linux, CentOS Stream, RHEL).
 
 ## Available Playbooks
 
+### Basic Server Setup (`setup-server-basic.yml`)
+
+Sets up a basic RHEL-based server with Docker and creates a management user.
+
+**Required variables:**
+None - all values are configured in the playbook
+
+**What it does:**
+- Updates all system packages
+- Installs essential tools (curl, git, wget, htop, etc.)
+- Installs Docker and Docker Compose
+- Starts and enables Docker service
+- Creates a management user (`cc`) with bash shell
+- Adds user to docker and wheel (sudo) groups
+- Sets up SSH authorized keys for the user
+
+**Usage:**
+```bash
+ansible-playbook enterprise_linux/setup-server-basic.yml \
+  -i inventories/servers.yaml
+```
+
+**Note:** You should customize the SSH public key and username in the playbook before running it.
+
 ### PHP and Apache Setup (`setup-php-apache.yaml`)
 
 Installs and configures PHP with Apache httpd on RHEL-based systems using the Remi repository for PHP versions.
