@@ -18,7 +18,7 @@ Installs and configures a GitHub Actions self-hosted runner (v2.328.0).
 - `github_runner_labels`: Custom labels (defaults to `self-hosted,Linux,X64` or `self-hosted,Linux,ARM64` based on architecture)
 - `github_runner_user`: System user for runner (defaults to `ghrunner`)
 - `github_runner_dir`: Installation directory (defaults to `/opt/ci/gh/[runner-name]`)
-- `github_runner_add_to_docker_group`: Add runner user to docker group (defaults to `false`)
+- `github_runner_add_to_docker_group`: Add runner user to docker group (defaults to `true`)
 
 **Usage:**
 ```bash
@@ -68,7 +68,7 @@ Installs and configures an Azure Pipelines self-hosted agent (v4.263.0).
 - `azure_agent_name`: Agent name (defaults to hostname)
 - `azure_agent_user`: System user for agent (defaults to `azpagent`)
 - `azure_agent_dir`: Installation directory (defaults to `/opt/ci/azp/[agent-name]`)
-- `azure_agent_add_to_docker_group`: Add agent user to docker group (defaults to `false`)
+- `azure_agent_add_to_docker_group`: Add agent user to docker group (defaults to `true`)
 
 **Usage:**
 ```bash

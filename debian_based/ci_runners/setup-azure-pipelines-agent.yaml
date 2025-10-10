@@ -12,7 +12,7 @@
     agent_user: "{{ azure_agent_user | default('azpagent') }}"
     agent_version: "4.263.0"
     agent_dir: "{{ azure_agent_dir | default('/opt/ci/azp/' + (azure_agent_name | default(ansible_hostname))) }}"
-    agent_add_to_docker_group: "{{ azure_agent_add_to_docker_group | default(false) }}"
+    agent_add_to_docker_group: "{{ azure_agent_add_to_docker_group | default(true) }}"
 
   tasks:
     - name: 'Update all packages'
