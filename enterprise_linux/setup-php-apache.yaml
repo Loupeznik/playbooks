@@ -1,0 +1,94 @@
+- name: 'Setup PHP and Apache on RHEL-based systems'
+
+  hosts: 'webservers'
+  become: true
+  become_user: root
+
+  vars:
+    rhel_version: "{{ target_rhel_version | default(10) }}"
+    php_version: "{{ target_php_version | default('8.3') }}"
+    install_httpd: "{{ install_apache | default(true) }}"
+    php_extensions: "{{ php_modules | default([]) }}"
+
+  tasks:
+    - name: 'Update all packages'
+      ansible.builtin.dnf:
+        name: '*'
+        state: latest
+        update_cache: true
+
+    - name: 'Install Apache httpd'
+      ansible.builtin.dnf:
+        name:
+          - httpd
+          - httpd-tools
+        state: present
+      when: install_httpd | bool
+
+    - name: 'Install EPEL repository'
+      ansible.builtin.dnf:
+        name: "https://dl.fedoraproject.org/pub/epel/epel-release-latest-{{ rhel_version }}.noarch.rpm"
+        state: present
+        disable_gpg_check: true
+
+    - name: 'Install Remi repository'
+      ansible.builtin.dnf:
+        name: "https://rpms.remirepo.net/enterprise/remi-release-{{ rhel_version }}.rpm"
+        state: present
+        disable_gpg_check: true
+
+    - name: 'Enable PHP module from Remi repository'
+      ansible.builtin.shell: |
+        dnf module reset php -y
+        dnf module enable php:remi-{{ php_version }} -y
+      args:
+        executable: /bin/bash
+      register: php_module_result
+      changed_when: "'Enabling module streams' in php_module_result.stdout or 'Nothing to do' not in php_module_result.stdout"
+
+    - name: 'Install PHP'
+      ansible.builtin.dnf:
+        name: php
+        state: present
+
+    - name: 'Install PHP extensions'
+      ansible.builtin.dnf:
+        name: "{{ php_extensions }}"
+        state: present
+      when: php_extensions | length > 0
+
+    - name: 'Start and enable Apache httpd service'
+      ansible.builtin.systemd:
+        name: httpd
+        state: started
+        enabled: true
+      when: install_httpd | bool
+
+    - name: 'Configure firewall for HTTP'
+      ansible.builtin.shell: |
+        firewall-cmd --permanent --add-service=http
+        firewall-cmd --reload
+      args:
+        executable: /bin/bash
+      when: install_httpd | bool
+      ignore_errors: true
+      changed_when: false
+
+    - name: 'Configure firewall for HTTPS'
+      ansible.builtin.shell: |
+        firewall-cmd --permanent --add-service=https
+        firewall-cmd --reload
+      args:
+        executable: /bin/bash
+      when: install_httpd | bool
+      ignore_errors: true
+      changed_when: false
+
+    - name: 'Get PHP version'
+      ansible.builtin.command: php --version
+      register: php_version_output
+      changed_when: false
+
+    - name: 'Display PHP version'
+      ansible.builtin.debug:
+        msg: "{{ php_version_output.stdout_lines[0] }}"

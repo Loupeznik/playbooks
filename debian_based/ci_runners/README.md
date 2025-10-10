@@ -14,7 +14,8 @@ Installs and configures a GitHub Actions self-hosted runner (v2.328.0).
 
 **Optional variables:**
 - `github_runner_name`: Runner name (defaults to hostname)
-- `github_runner_labels`: Custom labels (defaults to `self-hosted,Linux,X64`)
+- `github_runner_arch`: Runner architecture - `x64` or `arm64` (defaults to `x64`)
+- `github_runner_labels`: Custom labels (defaults to `self-hosted,Linux,X64` or `self-hosted,Linux,ARM64` based on architecture)
 - `github_runner_user`: System user for runner (defaults to `ghrunner`)
 - `github_runner_dir`: Installation directory (defaults to `/opt/ci/gh/[runner-name]`)
 - `github_runner_add_to_docker_group`: Add runner user to docker group (defaults to `false`)
@@ -34,6 +35,15 @@ ansible-playbook debian_based/ci_runners/setup-github-actions-runner.yaml \
   -e "github_repo_url=https://github.com/yourorg/yourrepo" \
   -e "github_runner_token=YOUR_TOKEN" \
   -e "github_runner_add_to_docker_group=true"
+```
+
+**Usage for ARM64 architecture:**
+```bash
+ansible-playbook debian_based/ci_runners/setup-github-actions-runner.yaml \
+  -i inventories/runners.yaml \
+  -e "github_repo_url=https://github.com/yourorg/yourrepo" \
+  -e "github_runner_token=YOUR_TOKEN" \
+  -e "github_runner_arch=arm64"
 ```
 
 **Uninstall:**

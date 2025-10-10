@@ -8,7 +8,8 @@
     github_url: "{{ github_repo_url }}"
     github_token: "{{ github_runner_token }}"
     runner_name: "{{ github_runner_name | default(ansible_hostname) }}"
-    runner_labels: "{{ github_runner_labels | default('self-hosted,Linux,X64') }}"
+    runner_arch: "{{ github_runner_arch | default('x64') }}"
+    runner_labels: "{{ github_runner_labels | default('self-hosted,Linux,' + (runner_arch | upper if runner_arch == 'x64' else 'ARM64')) }}"
     runner_user: "{{ github_runner_user | default('ghrunner') }}"
     runner_version: "2.328.0"
     runner_dir: "{{ github_runner_dir | default('/opt/ci/gh/' + (github_runner_name | default(ansible_hostname))) }}"
@@ -51,13 +52,13 @@
 
     - name: 'Download GitHub Actions runner'
       ansible.builtin.get_url:
-        url: "https://github.com/actions/runner/releases/download/v{{ runner_version }}/actions-runner-linux-x64-{{ runner_version }}.tar.gz"
-        dest: "/tmp/actions-runner-linux-x64-{{ runner_version }}.tar.gz"
+        url: "https://github.com/actions/runner/releases/download/v{{ runner_version }}/actions-runner-linux-{{ runner_arch }}-{{ runner_version }}.tar.gz"
+        dest: "/tmp/actions-runner-linux-{{ runner_arch }}-{{ runner_version }}.tar.gz"
         mode: '0644'
 
     - name: 'Extract runner archive'
       ansible.builtin.unarchive:
-        src: "/tmp/actions-runner-linux-x64-{{ runner_version }}.tar.gz"
+        src: "/tmp/actions-runner-linux-{{ runner_arch }}-{{ runner_version }}.tar.gz"
         dest: "{{ runner_dir }}"
         remote_src: true
         owner: "{{ runner_user }}"
@@ -93,5 +94,5 @@
 
     - name: 'Cleanup downloaded archive'
       ansible.builtin.file:
-        path: "/tmp/actions-runner-linux-x64-{{ runner_version }}.tar.gz"
+        path: "/tmp/actions-runner-linux-{{ runner_arch }}-{{ runner_version }}.tar.gz"
         state: absent
