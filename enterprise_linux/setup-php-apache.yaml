@@ -55,6 +55,7 @@
       ansible.builtin.dnf:
         name: "{{ php_extensions }}"
         state: present
+        skip_broken: true
       when: php_extensions | length > 0
 
     - name: 'Start and enable Apache httpd service'

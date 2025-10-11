@@ -69,23 +69,26 @@ Install PHP with common extensions:
 ```bash
 ansible-playbook enterprise_linux/setup-php-apache.yaml \
   -i inventories/webservers.yaml \
-  -e "php_modules=['php-mysqlnd','php-pdo','php-gd','php-mbstring','php-xml','php-curl','php-zip','php-json','php-opcache']"
+  -e "php_modules=['php-mysqlnd','php-gd','php-mbstring','php-xml','php-curl','php-zip','php-opcache','php-intl','php-bcmath']"
 ```
 
 **Common PHP Extensions:**
 - `php-mysqlnd` - MySQL/MariaDB database support
-- `php-pdo` - PHP Data Objects
 - `php-gd` - Image processing
 - `php-mbstring` - Multibyte string handling
 - `php-xml` - XML processing
 - `php-curl` - cURL support
 - `php-zip` - ZIP archive handling
-- `php-json` - JSON support
 - `php-opcache` - Opcode caching
 - `php-intl` - Internationalization
 - `php-ldap` - LDAP support
 - `php-soap` - SOAP protocol support
 - `php-bcmath` - Arbitrary precision mathematics
+- `php-pgsql` - PostgreSQL database support
+- `php-process` - Process control extensions (posix, shmop, sysvmsg, sysvsem, sysvshm)
+- `php-pecl-redis` - Redis support
+
+**Note:** Some extensions like `php-pdo` and `php-json` are built into the base PHP package on PHP 8.0+ and don't need to be installed separately. The playbook will automatically skip packages that aren't available or are already included.
 
 **Installation Details:**
 
