@@ -1,0 +1,339 @@
+---
+# AlmaLinux Database Server Hardening Playbook
+# This playbook configures PostgreSQL with security hardening
+# Run this AFTER 01-basic-setup.yml
+
+- name: AlmaLinux Database Server Hardening
+  hosts: almalinux_dbservers
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Verify basic hardening is complete
+      stat:
+        path: /etc/sysctl.d/99-hardening.conf
+      register: basic_hardening
+      failed_when: not basic_hardening.stat.exists
+
+  tasks:
+    # PostgreSQL Installation
+    - name: Install PostgreSQL repository
+      dnf:
+        name: "https://download.postgresql.org/pub/repos/yum/reporpms/EL-{{ ansible_distribution_major_version }}-x86_64/pgdg-redhat-repo-latest.noarch.rpm"
+        state: present
+        disable_gpg_check: true
+      when: postgres_install
+
+    - name: Disable built-in PostgreSQL module
+      command: dnf -qy module disable postgresql
+      changed_when: false
+      when: postgres_install
+
+    - name: Install PostgreSQL and dependencies
+      dnf:
+        name:
+          - "postgresql{{ postgres_version }}-server"
+          - "postgresql{{ postgres_version }}-contrib"
+          - "postgresql{{ postgres_version }}"
+          - python3-psycopg2
+          - python3-libselinux
+        state: present
+      when: postgres_install
+
+    - name: Check if PostgreSQL database is initialized
+      stat:
+        path: "/var/lib/pgsql/{{ postgres_version }}/data/PG_VERSION"
+      register: pg_data
+      when: postgres_install
+
+    - name: Initialize PostgreSQL database
+      command: "/usr/pgsql-{{ postgres_version }}/bin/postgresql-{{ postgres_version }}-setup initdb"
+      when:
+        - postgres_install
+        - not pg_data.stat.exists
+
+    # Backup User
+    - name: Create backup user
+      user:
+        name: "{{ db_backup_user }}"
+        group: "{{ db_backup_group }}"
+        shell: /bin/bash
+        create_home: true
+        state: present
+      when: db_backup_enabled
+
+    - name: Set resource limits for postgres user
+      pam_limits:
+        domain: "{{ item.domain }}"
+        limit_type: "{{ item.limit_type }}"
+        limit_item: "{{ item.limit_item }}"
+        value: "{{ item.value }}"
+      loop: "{{ postgres_user_limits }}"
+
+    # Database Directories
+    - name: Create database directories
+      file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop: "{{ db_directories }}"
+      when: db_backup_enabled
+
+    # PostgreSQL Configuration
+    - name: Configure PostgreSQL
+      template:
+        src: ../templates/postgresql.conf.j2
+        dest: "/var/lib/pgsql/{{ postgres_version }}/data/postgresql.conf"
+        owner: postgres
+        group: postgres
+        mode: '0600'
+        backup: true
+      when: postgres_install
+      notify: Restart postgresql
+
+    - name: Configure PostgreSQL client authentication
+      template:
+        src: ../templates/pg_hba.conf.j2
+        dest: "/var/lib/pgsql/{{ postgres_version }}/data/pg_hba.conf"
+        owner: postgres
+        group: postgres
+        mode: '0600'
+        backup: true
+      when: postgres_install
+      notify: Restart postgresql
+
+    - name: Ensure PostgreSQL data directory permissions
+      file:
+        path: "/var/lib/pgsql/{{ postgres_version }}/data"
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: '0700'
+      when: postgres_install
+
+    - name: Ensure PostgreSQL is enabled and started
+      systemd:
+        name: "postgresql-{{ postgres_version }}"
+        enabled: true
+        state: started
+      when: postgres_install
+
+    # SSL Configuration for PostgreSQL
+    - name: Generate self-signed SSL certificate for PostgreSQL
+      command: >
+        openssl req -new -x509 -days 365 -nodes -text
+        -out /var/lib/pgsql/{{ postgres_version }}/data/server.crt
+        -keyout /var/lib/pgsql/{{ postgres_version }}/data/server.key
+        -subj "/CN={{ ansible_fqdn }}"
+      args:
+        creates: "/var/lib/pgsql/{{ postgres_version }}/data/server.crt"
+      when:
+        - postgres_install
+        - postgres_ssl_enabled
+
+    - name: Set permissions on PostgreSQL SSL certificate
+      file:
+        path: "{{ item.path }}"
+        owner: postgres
+        group: postgres
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: '/var/lib/pgsql/{{ postgres_version }}/data/server.crt', mode: '0600' }
+        - { path: '/var/lib/pgsql/{{ postgres_version }}/data/server.key', mode: '0600' }
+      when:
+        - postgres_install
+        - postgres_ssl_enabled
+
+    # Database Users and Databases
+    - name: Create PostgreSQL databases
+      postgresql_db:
+        name: "{{ item.name }}"
+        owner: "{{ item.owner }}"
+        encoding: "{{ item.encoding }}"
+        lc_collate: "{{ item.lc_collate }}"
+        lc_ctype: "{{ item.lc_ctype }}"
+        template: "{{ item.template }}"
+        state: "{{ item.state }}"
+      become: true
+      become_user: postgres
+      loop: "{{ postgres_databases }}"
+      when:
+        - postgres_install
+        - postgres_databases is defined
+
+    - name: Create PostgreSQL users
+      postgresql_user:
+        name: "{{ item.name }}"
+        password: "{{ item.password }}"
+        db: "{{ item.db }}"
+        priv: "{{ item.priv }}"
+        state: "{{ item.state }}"
+      become: true
+      become_user: postgres
+      loop: "{{ postgres_users }}"
+      no_log: true
+      when:
+        - postgres_install
+        - postgres_users is defined
+
+    # SELinux Configuration for PostgreSQL
+    - name: Configure SELinux for PostgreSQL
+      seboolean:
+        name: postgresql_can_rsync
+        state: true
+        persistent: true
+      when: postgres_install
+
+    - name: Allow PostgreSQL port in SELinux
+      seport:
+        ports: "{{ postgres_port }}"
+        proto: tcp
+        setype: postgresql_port_t
+        state: present
+      when: postgres_install
+
+    # Firewall Configuration
+    - name: Configure firewall for PostgreSQL (rich rules)
+      firewalld:
+        rich_rule: 'rule family="ipv4" source address="{{ item }}" port port="{{ postgres_port }}" protocol="tcp" accept'
+        permanent: true
+        state: enabled
+        immediate: true
+      loop: "{{ firewall_dbserver_allow_from }}"
+      when:
+        - postgres_install
+        - firewall_dbserver_allow_from is defined
+
+    # Backup Configuration
+    - name: Create backup script
+      copy:
+        content: |
+          #!/bin/bash
+          # PostgreSQL Backup Script
+          # Managed by Ansible
+
+          BACKUP_DIR="{{ db_backup_dir }}"
+          RETENTION_DAYS="{{ db_backup_retention_days }}"
+          TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+
+          # Create backup directory if it doesn't exist
+          mkdir -p "$BACKUP_DIR"
+
+          # Backup all databases
+          sudo -u postgres /usr/pgsql-{{ postgres_version }}/bin/pg_dumpall | gzip > "$BACKUP_DIR/postgresql_backup_$TIMESTAMP.sql.gz"
+
+          # Set permissions
+          chmod 600 "$BACKUP_DIR/postgresql_backup_$TIMESTAMP.sql.gz"
+
+          # Remove old backups
+          find "$BACKUP_DIR" -name "postgresql_backup_*.sql.gz" -mtime +$RETENTION_DAYS -delete
+
+          # Log result
+          if [ $? -eq 0 ]; then
+              echo "$(date): Backup completed successfully" >> /var/log/postgresql_backup.log
+          else
+              echo "$(date): Backup failed" >> /var/log/postgresql_backup.log
+              exit 1
+          fi
+        dest: /usr/local/bin/postgresql-backup.sh
+        owner: root
+        group: root
+        mode: '0750'
+      when: db_backup_enabled
+
+    - name: Create backup cron job
+      cron:
+        name: "PostgreSQL Backup"
+        minute: "{{ db_backup_schedule_minute }}"
+        hour: "{{ db_backup_schedule_hour }}"
+        job: "/usr/local/bin/postgresql-backup.sh"
+        user: root
+      when: db_backup_enabled
+
+    # Logging
+    - name: Ensure PostgreSQL log directory exists
+      file:
+        path: "/var/lib/pgsql/{{ postgres_version }}/data/log"
+        state: directory
+        owner: postgres
+        group: postgres
+        mode: '0700'
+      when: postgres_install
+
+    - name: Configure PostgreSQL log rotation
+      copy:
+        content: |
+          /var/lib/pgsql/{{ postgres_version }}/data/log/*.log {
+              daily
+              rotate 30
+              missingok
+              compress
+              delaycompress
+              notifempty
+              create 0600 postgres postgres
+              sharedscripts
+          }
+        dest: /etc/logrotate.d/postgresql
+        owner: root
+        group: root
+        mode: '0644'
+      when: postgres_install
+
+    # Monitoring
+    - name: Create database monitoring user
+      postgresql_user:
+        name: monitoring
+        password: "MonitoringPass123!"  # Change this!
+        role_attr_flags: LOGIN
+        state: present
+      become: true
+      become_user: postgres
+      when: postgres_install
+      no_log: true
+
+    - name: Grant monitoring user SELECT on pg_stat_database
+      postgresql_query:
+        db: postgres
+        query: "GRANT pg_monitor TO monitoring;"
+      become: true
+      become_user: postgres
+      when: postgres_install
+
+    # Final checks
+    - name: Verify PostgreSQL is running
+      systemd:
+        name: "postgresql-{{ postgres_version }}"
+        state: started
+      check_mode: true
+      register: postgres_status
+
+    - name: Display completion message
+      debug:
+        msg: |
+          ========================================
+          Database Server Hardening Complete!
+          ========================================
+          - PostgreSQL {{ postgres_version }} installed
+          - SSL/TLS configured
+          - Access control configured
+          - Backup script created
+          - Firewall rules applied
+          - SELinux configured
+          - Logging configured
+
+          Next Steps:
+          1. Review and update database passwords
+          2. Configure application connections
+          3. Test database backups
+          4. Monitor logs in /var/lib/pgsql/{{ postgres_version }}/data/log/
+          5. Review pg_hba.conf access rules
+
+          IMPORTANT: Update default passwords in group_vars!
+
+  handlers:
+    - name: Restart postgresql
+      systemd:
+        name: "postgresql-{{ postgres_version }}"
+        state: restarted

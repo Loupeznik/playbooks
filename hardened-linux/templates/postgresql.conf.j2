@@ -1,0 +1,123 @@
+# PostgreSQL Configuration - Hardened
+# Managed by Ansible - Do not edit manually
+# This is a partial configuration that includes security-relevant settings
+# Other settings will use PostgreSQL defaults
+
+#------------------------------------------------------------------------------
+# CONNECTIONS AND AUTHENTICATION
+#------------------------------------------------------------------------------
+
+# Connection Settings
+listen_addresses = '{{ postgres_listen_addresses }}'
+port = {{ postgres_port }}
+max_connections = {{ postgres_max_connections }}
+superuser_reserved_connections = 3
+
+# SSL Settings
+{% if postgres_ssl_enabled %}
+ssl = on
+ssl_cert_file = '{{ postgres_ssl_cert_file }}'
+ssl_key_file = '{{ postgres_ssl_key_file }}'
+{% if postgres_ssl_ca_file %}
+ssl_ca_file = '{{ postgres_ssl_ca_file }}'
+{% endif %}
+ssl_prefer_server_ciphers = {{ postgres_ssl_prefer_server_ciphers | lower }}
+ssl_min_protocol_version = '{{ postgres_ssl_min_protocol_version }}'
+ssl_ciphers = 'HIGH:MEDIUM:+3DES:!aNULL'
+{% else %}
+ssl = off
+{% endif %}
+
+# Authentication
+password_encryption = {{ postgres_password_encryption }}
+
+#------------------------------------------------------------------------------
+# RESOURCE USAGE
+#------------------------------------------------------------------------------
+
+# Memory
+shared_buffers = {{ postgres_shared_buffers }}
+effective_cache_size = {{ postgres_effective_cache_size }}
+work_mem = {{ postgres_work_mem }}
+maintenance_work_mem = {{ postgres_maintenance_work_mem }}
+
+#------------------------------------------------------------------------------
+# WRITE-AHEAD LOG
+#------------------------------------------------------------------------------
+
+wal_level = replica
+fsync = on
+synchronous_commit = on
+wal_sync_method = fdatasync
+full_page_writes = on
+
+#------------------------------------------------------------------------------
+# QUERY TUNING
+#------------------------------------------------------------------------------
+
+# Planner Cost Constants
+random_page_cost = 1.1
+effective_io_concurrency = 200
+
+#------------------------------------------------------------------------------
+# REPORTING AND LOGGING
+#------------------------------------------------------------------------------
+
+# Where to Log
+log_destination = '{{ postgres_log_destination }}'
+{% if postgres_logging_collector %}
+logging_collector = on
+log_directory = '{{ postgres_log_directory }}'
+log_filename = '{{ postgres_log_filename }}'
+log_file_mode = 0600
+log_rotation_age = {{ postgres_log_rotation_age }}
+log_rotation_size = {{ postgres_log_rotation_size }}
+{% endif %}
+
+# When to Log
+log_min_duration_statement = {{ postgres_log_min_duration_statement }}
+
+# What to Log
+log_connections = {{ postgres_log_connections | lower }}
+log_disconnections = {{ postgres_log_disconnections | lower }}
+log_duration = {{ postgres_log_duration | lower }}
+log_hostname = off
+log_line_prefix = '{{ postgres_log_line_prefix }}'
+log_statement = 'ddl'
+log_timezone = 'UTC'
+
+#------------------------------------------------------------------------------
+# RUNTIME STATISTICS
+#------------------------------------------------------------------------------
+
+track_activities = on
+track_counts = on
+track_io_timing = on
+track_functions = all
+stats_temp_directory = '/var/run/postgresql/{{ postgres_version }}-main.pg_stat_tmp'
+
+#------------------------------------------------------------------------------
+# CLIENT CONNECTION DEFAULTS
+#------------------------------------------------------------------------------
+
+# Locale and Formatting
+datestyle = 'iso, mdy'
+timezone = 'UTC'
+lc_messages = 'en_US.UTF-8'
+lc_monetary = 'en_US.UTF-8'
+lc_numeric = 'en_US.UTF-8'
+lc_time = 'en_US.UTF-8'
+default_text_search_config = 'pg_catalog.english'
+
+#------------------------------------------------------------------------------
+# LOCK MANAGEMENT
+#------------------------------------------------------------------------------
+
+deadlock_timeout = 1s
+
+#------------------------------------------------------------------------------
+# VERSION AND PLATFORM COMPATIBILITY
+#------------------------------------------------------------------------------
+
+# These settings are for compatibility and should not be changed
+# unless you know what you're doing

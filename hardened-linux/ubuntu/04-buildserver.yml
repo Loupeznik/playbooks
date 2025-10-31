@@ -1,0 +1,388 @@
+---
+# Ubuntu Build Server Hardening Playbook
+# This playbook configures CI/CD runners with security hardening
+# Run this AFTER 01-basic-setup.yml
+
+- name: Ubuntu Build Server Hardening
+  hosts: ubuntu_buildservers
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Verify basic hardening is complete
+      stat:
+        path: /etc/sysctl.d/99-hardening.conf
+      register: basic_hardening
+      failed_when: not basic_hardening.stat.exists
+
+  tasks:
+    # Runner User
+    - name: Create runner user
+      user:
+        name: "{{ runner_user }}"
+        group: "{{ runner_group }}"
+        shell: "{{ runner_user_shell }}"
+        home: "{{ runner_user_home }}"
+        create_home: true
+        state: present
+      when: runner_create_user
+
+    - name: Set resource limits for runner user
+      pam_limits:
+        domain: "{{ item.domain }}"
+        limit_type: "{{ item.limit_type }}"
+        limit_item: "{{ item.limit_item }}"
+        value: "{{ item.value }}"
+      loop: "{{ runner_user_limits }}"
+
+    # Build Directories
+    - name: Create build directories
+      file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop: "{{ build_directories }}"
+
+    # Docker Installation
+    - name: Install Docker prerequisites
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+      when: docker_install
+
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+      when: docker_install
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+      when: docker_install
+
+    - name: Install Docker
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+        update_cache: true
+      when: docker_install
+
+    - name: Create Docker configuration directory
+      file:
+        path: /etc/docker
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when: docker_install
+
+    - name: Configure Docker daemon
+      copy:
+        content: "{{ docker_daemon_config | to_nice_json }}"
+        dest: /etc/docker/daemon.json
+        owner: root
+        group: root
+        mode: '0644'
+      when: docker_install
+      notify: Restart docker
+
+    - name: Add runner user to docker group
+      user:
+        name: "{{ runner_user }}"
+        groups: docker
+        append: true
+      when: docker_install
+
+    - name: Ensure Docker is enabled and started
+      systemd:
+        name: docker
+        enabled: true
+        state: started
+      when: docker_install
+
+    # Build Tools
+    - name: Install build tools
+      apt:
+        name: "{{ build_tools_packages }}"
+        state: present
+        update_cache: true
+
+    # Docker Cleanup
+    - name: Create Docker cleanup script
+      copy:
+        content: |
+          #!/bin/bash
+          # Docker Cleanup Script
+          # Managed by Ansible
+
+          echo "$(date): Starting Docker cleanup..."
+
+          # Prune containers, images, networks older than 24h
+          docker system prune {{ docker_prune_options }}
+
+          # Log result
+          if [ $? -eq 0 ]; then
+              echo "$(date): Docker cleanup completed successfully" >> /var/log/docker-cleanup.log
+          else
+              echo "$(date): Docker cleanup failed" >> /var/log/docker-cleanup.log
+              exit 1
+          fi
+        dest: /usr/local/bin/docker-cleanup.sh
+        owner: root
+        group: root
+        mode: '0750'
+      when:
+        - docker_install
+        - docker_prune_enabled
+
+    - name: Create Docker cleanup cron job
+      cron:
+        name: "Docker Cleanup"
+        minute: "{{ docker_prune_schedule_minute }}"
+        hour: "{{ docker_prune_schedule_hour }}"
+        job: "/usr/local/bin/docker-cleanup.sh"
+        user: root
+      when:
+        - docker_install
+        - docker_prune_enabled
+
+    # Build Artifacts Cleanup
+    - name: Create build artifacts cleanup script
+      copy:
+        content: |
+          #!/bin/bash
+          # Build Artifacts Cleanup Script
+          # Managed by Ansible
+
+          CLEANUP_DAYS="{{ build_cleanup_days }}"
+
+          echo "$(date): Starting build artifacts cleanup..."
+
+          {% for path in build_cleanup_paths %}
+          # Clean {{ path }}
+          if [ -d "{{ path }}" ]; then
+              find "{{ path }}" -type f -mtime +$CLEANUP_DAYS -delete 2>/dev/null
+              find "{{ path }}" -type d -empty -delete 2>/dev/null
+          fi
+          {% endfor %}
+
+          # Log result
+          echo "$(date): Build artifacts cleanup completed" >> /var/log/build-cleanup.log
+        dest: /usr/local/bin/build-cleanup.sh
+        owner: root
+        group: root
+        mode: '0750'
+      when: build_cleanup_enabled
+
+    - name: Create build cleanup cron job
+      cron:
+        name: "Build Artifacts Cleanup"
+        minute: "{{ build_cleanup_schedule_minute }}"
+        hour: "{{ build_cleanup_schedule_hour }}"
+        job: "/usr/local/bin/build-cleanup.sh"
+        user: root
+      when: build_cleanup_enabled
+
+    # Sudo Configuration for Runner
+    - name: Configure limited sudo for runner
+      copy:
+        content: |
+          # Sudo configuration for CI/CD runner
+          # Managed by Ansible
+          Defaults:{{ runner_user }} !requiretty
+          {{ runner_user }} ALL=(ALL) NOPASSWD: {% for cmd in runner_sudo_commands %}{{ cmd }}{% if not loop.last %}, {% endif %}{% endfor %}
+
+        dest: "/etc/sudoers.d/{{ runner_user }}"
+        owner: root
+        group: root
+        mode: '0440'
+        validate: 'visudo -cf %s'
+      when: runner_sudo_commands is defined and runner_sudo_commands | length > 0
+
+    # GitHub Actions Runner Setup (if needed)
+    - name: Create GitHub Actions runner directory
+      file:
+        path: "{{ runner_user_home }}/actions-runner"
+        state: directory
+        owner: "{{ runner_user }}"
+        group: "{{ runner_group }}"
+        mode: '0755'
+      when:
+        - runner_type == 'github'
+        - github_runner_url is defined
+        - github_runner_url != ''
+
+    # Note: Actual runner installation requires token and URL which should be done manually
+    # or via a separate secure process
+
+    # Systemd Service for Runner
+    - name: Create systemd service file for runner
+      copy:
+        content: |
+          [Unit]
+          Description=CI/CD Runner Service
+          After=network.target docker.service
+          Requires=docker.service
+
+          [Service]
+          Type=simple
+          User={{ runner_user }}
+          WorkingDirectory={{ runner_user_home }}
+          ExecStart={{ runner_user_home }}/start-runner.sh
+          Restart=always
+          RestartSec=10
+          {% for key, value in runner_service_limits.items() %}
+          {{ key }}={{ value }}
+          {% endfor %}
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/runner.service
+        owner: root
+        group: root
+        mode: '0644'
+      when: runner_service_limits is defined
+
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: true
+
+    # Firewall - Build servers typically only need outbound
+    - name: Ensure no unnecessary inbound ports
+      debug:
+        msg: "Build server configured for outbound-only access (except SSH)"
+
+    # Security - Disable core dumps for builds
+    - name: Disable core dumps for runner user
+      pam_limits:
+        domain: "{{ runner_user }}"
+        limit_type: "{{ item }}"
+        limit_item: core
+        value: '0'
+      loop:
+        - hard
+        - soft
+
+    # Monitoring
+    - name: Create runner monitoring script
+      copy:
+        content: |
+          #!/bin/bash
+          # Runner Monitoring Script
+          # Check runner process and Docker health
+
+          RUNNER_USER="{{ runner_user }}"
+          LOG_FILE="/var/log/runner-monitor.log"
+
+          # Check if runner process is running
+          if ! pgrep -u "$RUNNER_USER" -f "runner" > /dev/null; then
+              echo "$(date): WARNING - Runner process not found" >> "$LOG_FILE"
+          fi
+
+          # Check Docker service
+          if ! systemctl is-active --quiet docker; then
+              echo "$(date): WARNING - Docker service is not running" >> "$LOG_FILE"
+          fi
+
+          # Check disk space
+          DISK_USAGE=$(df -h {{ runner_user_home }} | tail -1 | awk '{print $5}' | sed 's/%//')
+          if [ "$DISK_USAGE" -gt 85 ]; then
+              echo "$(date): WARNING - Disk usage at ${DISK_USAGE}%" >> "$LOG_FILE"
+          fi
+
+          # Check Docker disk usage
+          if command -v docker &> /dev/null; then
+              DOCKER_USAGE=$(docker system df | grep "Images" | awk '{print $4}' | sed 's/%//')
+              if [ ! -z "$DOCKER_USAGE" ] && [ "$DOCKER_USAGE" -gt 80 ]; then
+                  echo "$(date): WARNING - Docker disk usage at ${DOCKER_USAGE}%" >> "$LOG_FILE"
+              fi
+          fi
+        dest: /usr/local/bin/runner-monitor.sh
+        owner: root
+        group: root
+        mode: '0750'
+
+    - name: Create runner monitoring cron job
+      cron:
+        name: "Runner Monitoring"
+        minute: "*/30"
+        job: "/usr/local/bin/runner-monitor.sh"
+        user: root
+
+    # Log Rotation
+    - name: Configure log rotation for build logs
+      copy:
+        content: |
+          {{ runner_user_home }}/logs/*.log {
+              daily
+              rotate {{ runner_log_retention_days }}
+              missingok
+              compress
+              delaycompress
+              notifempty
+              create 0640 {{ runner_user }} {{ runner_group }}
+              su {{ runner_user }} {{ runner_group }}
+          }
+
+          /var/log/docker-cleanup.log
+          /var/log/build-cleanup.log
+          /var/log/runner-monitor.log {
+              weekly
+              rotate 4
+              missingok
+              compress
+              delaycompress
+              notifempty
+              create 0640 root root
+          }
+        dest: /etc/logrotate.d/runner
+        owner: root
+        group: root
+        mode: '0644'
+
+    # Final Message
+    - name: Display completion message
+      debug:
+        msg: |
+          ========================================
+          Build Server Hardening Complete!
+          ========================================
+          - Runner user created: {{ runner_user }}
+          - Docker installed and configured
+          - Build tools installed
+          - Cleanup jobs configured
+          - Resource limits applied
+          - Monitoring configured
+
+          Next Steps:
+          1. Install and configure {{ runner_type }} runner manually:
+             - GitHub Actions: Download and configure runner
+             - Azure DevOps: Install and configure agent
+          2. Configure runner authentication tokens
+          3. Test build pipeline
+          4. Monitor logs in {{ runner_log_dir }}
+          5. Review and adjust resource limits
+
+          MANUAL SETUP REQUIRED:
+          - Runner registration with {{ runner_type }}
+          - Authentication tokens (use vault!)
+
+  handlers:
+    - name: Restart docker
+      systemd:
+        name: docker
+        state: restarted

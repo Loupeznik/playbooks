@@ -1,0 +1,329 @@
+---
+# Ubuntu Application Server Hardening Playbook
+# This playbook configures Nginx, Docker, and application-specific hardening
+# Run this AFTER 01-basic-setup.yml
+
+- name: Ubuntu Application Server Hardening
+  hosts: ubuntu_appservers
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Verify basic hardening is complete
+      stat:
+        path: /etc/sysctl.d/99-hardening.conf
+      register: basic_hardening
+      failed_when: not basic_hardening.stat.exists
+
+  tasks:
+    # Application User
+    - name: Create application user
+      user:
+        name: "{{ app_user }}"
+        group: "{{ app_group }}"
+        shell: "{{ app_user_shell }}"
+        home: "{{ app_user_home }}"
+        create_home: true
+        state: present
+      when: app_create_user
+
+    - name: Set resource limits for application user
+      pam_limits:
+        domain: "{{ item.domain }}"
+        limit_type: "{{ item.limit_type }}"
+        limit_item: "{{ item.limit_item }}"
+        value: "{{ item.value }}"
+      loop: "{{ app_user_limits }}"
+
+    # Application Directories
+    - name: Create application directories
+      file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop: "{{ app_directories }}"
+
+    # Nginx Installation and Configuration
+    - name: Install Nginx
+      apt:
+        name: nginx
+        state: present
+      when: nginx_install
+
+    - name: Remove default Nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      when: nginx_install
+      notify: Restart nginx
+
+    - name: Configure Nginx
+      template:
+        src: ../templates/nginx.conf.j2
+        dest: /etc/nginx/nginx.conf
+        owner: root
+        group: root
+        mode: '0644'
+        validate: 'nginx -t -c %s'
+        backup: true
+      when: nginx_install
+      notify: Restart nginx
+
+    - name: Ensure Nginx log directory has correct permissions
+      file:
+        path: /var/log/nginx
+        state: directory
+        owner: www-data
+        group: adm
+        mode: '0750'
+      when: nginx_install
+
+    - name: Configure Nginx log rotation
+      copy:
+        content: |
+          /var/log/nginx/*.log {
+              daily
+              missingok
+              rotate 14
+              compress
+              delaycompress
+              notifempty
+              create 0640 www-data adm
+              sharedscripts
+              prerotate
+                  if [ -d /etc/logrotate.d/httpd-prerotate ]; then \
+                      run-parts /etc/logrotate.d/httpd-prerotate; \
+                  fi \
+              endscript
+              postrotate
+                  invoke-rc.d nginx rotate >/dev/null 2>&1
+              endscript
+          }
+        dest: /etc/logrotate.d/nginx
+        owner: root
+        group: root
+        mode: '0644'
+      when: nginx_install
+
+    - name: Ensure Nginx is enabled and started
+      systemd:
+        name: nginx
+        enabled: true
+        state: started
+      when: nginx_install
+
+    # Docker Installation and Configuration
+    - name: Install Docker prerequisites
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+      when: docker_install
+
+    - name: Add Docker GPG key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+      when: docker_install
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+        state: present
+      when: docker_install
+
+    - name: Install Docker
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+        update_cache: true
+      when: docker_install
+
+    - name: Create Docker configuration directory
+      file:
+        path: /etc/docker
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when: docker_install
+
+    - name: Configure Docker daemon
+      copy:
+        content: "{{ docker_daemon_config | to_nice_json }}"
+        dest: /etc/docker/daemon.json
+        owner: root
+        group: root
+        mode: '0644'
+      when: docker_install
+      notify: Restart docker
+
+    - name: Add users to docker group
+      user:
+        name: "{{ item }}"
+        groups: docker
+        append: true
+      loop: "{{ docker_users }}"
+      when: docker_install
+
+    - name: Ensure Docker is enabled and started
+      systemd:
+        name: docker
+        enabled: true
+        state: started
+      when: docker_install
+
+    - name: Configure Docker log rotation
+      copy:
+        content: |
+          /var/lib/docker/containers/*/*.log {
+              rotate 7
+              daily
+              compress
+              missingok
+              delaycompress
+              copytruncate
+          }
+        dest: /etc/logrotate.d/docker
+        owner: root
+        group: root
+        mode: '0644'
+      when: docker_install
+
+    # Firewall Configuration for App Server
+    - name: Allow HTTP traffic
+      firewalld:
+        service: http
+        permanent: true
+        state: enabled
+        immediate: true
+
+    - name: Allow HTTPS traffic
+      firewalld:
+        service: https
+        permanent: true
+        state: enabled
+        immediate: true
+
+    - name: Allow additional app server ports
+      firewalld:
+        port: "{{ item }}/tcp"
+        permanent: true
+        state: enabled
+        immediate: true
+      loop: "{{ firewall_appserver_tcp_ports }}"
+      when:
+        - firewall_appserver_tcp_ports is defined
+        - firewall_appserver_tcp_ports | length > 0
+        - item not in [80, 443]
+
+    # SELinux/AppArmor for Docker
+    - name: Load AppArmor profile for Docker
+      command: apparmor_parser -r /etc/apparmor.d/docker
+      ignore_errors: true
+      when: docker_install
+
+    # Security Hardening
+    - name: Disable unnecessary Nginx modules
+      file:
+        path: "/etc/nginx/modules-enabled/{{ item }}"
+        state: absent
+      loop:
+        - 50-mod-http-geoip.conf
+        - 50-mod-http-image-filter.conf
+        - 50-mod-http-xslt-filter.conf
+        - 50-mod-mail.conf
+        - 50-mod-stream.conf
+      ignore_errors: true
+      when: nginx_install
+      notify: Restart nginx
+
+    # Application-specific fail2ban filters
+    - name: Add Nginx fail2ban filter
+      copy:
+        content: |
+          # Fail2Ban filter for Nginx auth failures
+          [Definition]
+          failregex = ^<HOST> -.*"(GET|POST).*HTTP.*" 401
+                      ^<HOST> -.*"(GET|POST).*HTTP.*" 403
+          ignoreregex =
+        dest: /etc/fail2ban/filter.d/nginx-auth.conf
+        owner: root
+        group: root
+        mode: '0644'
+      when: nginx_install
+      notify: Restart fail2ban
+
+    # Monitoring
+    - name: Create Nginx status monitoring endpoint (internal only)
+      copy:
+        content: |
+          server {
+              listen 127.0.0.1:8080;
+              server_name localhost;
+              location /nginx_status {
+                  stub_status on;
+                  access_log off;
+                  allow 127.0.0.1;
+                  deny all;
+              }
+          }
+        dest: /etc/nginx/sites-available/status
+        owner: root
+        group: root
+        mode: '0644'
+      when: nginx_install
+
+    - name: Enable Nginx status site
+      file:
+        src: /etc/nginx/sites-available/status
+        dest: /etc/nginx/sites-enabled/status
+        state: link
+      when: nginx_install
+      notify: Restart nginx
+
+    # Final Message
+    - name: Display completion message
+      debug:
+        msg: |
+          ========================================
+          Application Server Hardening Complete!
+          ========================================
+          - Nginx installed and configured
+          - Docker installed and hardened
+          - Application user created
+          - Firewall rules applied
+          - Logs configured
+
+          Next Steps:
+          1. Deploy your applications
+          2. Configure SSL certificates
+          3. Set up application-specific Nginx configs
+          4. Test connectivity and security
+
+  handlers:
+    - name: Restart nginx
+      systemd:
+        name: nginx
+        state: restarted
+
+    - name: Restart docker
+      systemd:
+        name: docker
+        state: restarted
+
+    - name: Restart fail2ban
+      systemd:
+        name: fail2ban
+        state: restarted

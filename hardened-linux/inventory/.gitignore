@@ -1,0 +1,8 @@
+# Ignore all inventory files except examples
+*.yml
+*.yaml
+!production.yml.example
+!staging.yml.example
+
+# Keep this gitignore
+!.gitignore

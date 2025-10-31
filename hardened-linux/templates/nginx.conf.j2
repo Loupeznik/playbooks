@@ -1,0 +1,93 @@
+# Nginx Configuration - Hardened
+# Managed by Ansible - Do not edit manually
+
+user {% if ansible_os_family == 'Debian' %}www-data{% elif ansible_os_family == 'RedHat' %}nginx{% endif %};
+worker_processes auto;
+pid /run/nginx.pid;
+{% if ansible_os_family == 'Debian' %}
+include /etc/nginx/modules-enabled/*.conf;
+{% endif %}
+
+events {
+    worker_connections 1024;
+    use epoll;
+    multi_accept on;
+}
+
+http {
+    ##
+    # Basic Settings
+    ##
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout {{ nginx_keepalive_timeout }};
+    types_hash_max_size 2048;
+    server_tokens {{ nginx_server_tokens }};
+
+    client_max_body_size {{ nginx_client_max_body_size }};
+    client_body_buffer_size 128k;
+    client_header_buffer_size 1k;
+    large_client_header_buffers 4 4k;
+    output_buffers 1 32k;
+    postpone_output 1460;
+
+    # Timeouts
+    client_body_timeout 12;
+    client_header_timeout 12;
+    send_timeout 10;
+
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    ##
+    # SSL Settings
+    ##
+    {% if nginx_enable_ssl %}
+    ssl_protocols {{ nginx_ssl_protocols | join(' ') }};
+    ssl_prefer_server_ciphers {{ nginx_ssl_prefer_server_ciphers }};
+    ssl_ciphers "{{ nginx_ssl_ciphers }}";
+    ssl_session_cache shared:SSL:50m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+    ssl_stapling on;
+    ssl_stapling_verify on;
+    {% endif %}
+
+    ##
+    # Logging Settings
+    ##
+    access_log /var/log/nginx/access.log;
+    error_log /var/log/nginx/error.log;
+
+    ##
+    # Gzip Settings
+    ##
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_comp_level 6;
+    gzip_types text/plain text/css text/xml text/javascript application/json application/javascript application/xml+rss application/rss+xml font/truetype font/opentype application/vnd.ms-fontobject image/svg+xml;
+    gzip_disable "msie6";
+
+    ##
+    # Rate Limiting
+    ##
+    {% if nginx_rate_limit_enabled %}
+    limit_req_zone $binary_remote_addr zone={{ nginx_rate_limit_zone }}:{{ nginx_rate_limit_zone_size }} rate={{ nginx_rate_limit_rate }};
+    limit_req_status 429;
+    {% endif %}
+
+    ##
+    # Security Headers (default, can be overridden per server block)
+    ##
+    {% for header, value in nginx_security_headers.items() %}
+    add_header {{ header }} "{{ value }}" always;
+    {% endfor %}
+
+    ##
+    # Virtual Host Configs
+    ##
+    include /etc/nginx/conf.d/*.conf;
+    include /etc/nginx/sites-enabled/*;
+}

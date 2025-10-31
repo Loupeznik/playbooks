@@ -1,0 +1,95 @@
+# SSH Daemon Configuration - Hardened
+# Managed by Ansible - Do not edit manually
+
+# Network
+Port {{ ssh_port }}
+AddressFamily any
+ListenAddress 0.0.0.0
+ListenAddress ::
+
+# Protocol
+Protocol 2
+
+# Host keys
+HostKey /etc/ssh/ssh_host_rsa_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+HostKey /etc/ssh/ssh_host_ed25519_key
+
+# Ciphers and key exchange
+Ciphers {{ ssh_ciphers | join(',') }}
+MACs {{ ssh_macs | join(',') }}
+KexAlgorithms {{ ssh_kex_algorithms | join(',') }}
+
+# Logging
+SyslogFacility AUTH
+LogLevel VERBOSE
+
+# Authentication
+LoginGraceTime {{ ssh_login_grace_time }}
+PermitRootLogin {{ ssh_permit_root_login }}
+StrictModes yes
+MaxAuthTries {{ ssh_max_auth_tries }}
+MaxSessions {{ ssh_max_sessions }}
+
+# Public key authentication
+PubkeyAuthentication {{ ssh_pubkey_authentication }}
+AuthorizedKeysFile .ssh/authorized_keys
+
+# Password authentication
+PasswordAuthentication {{ ssh_password_authentication }}
+PermitEmptyPasswords {{ ssh_permit_empty_passwords }}
+KbdInteractiveAuthentication {{ ssh_challenge_response_auth }}
+
+# Kerberos options
+KerberosAuthentication no
+KerberosTicketCleanup yes
+
+# GSSAPI options
+GSSAPIAuthentication no
+GSSAPICleanupCredentials yes
+
+# PAM
+UsePAM yes
+
+# X11 forwarding
+X11Forwarding {{ ssh_x11_forwarding }}
+X11DisplayOffset 10
+PrintMotd no
+PrintLastLog yes
+
+# TCP keep alive
+TCPKeepAlive yes
+ClientAliveInterval {{ ssh_client_alive_interval }}
+ClientAliveCountMax {{ ssh_client_alive_count_max }}
+
+# Disable unused features
+AllowAgentForwarding no
+AllowTcpForwarding no
+GatewayPorts no
+PermitTunnel no
+PermitUserEnvironment no
+
+# Accept locale-related environment variables
+AcceptEnv LANG LC_*
+
+# SFTP subsystem
+{% if ansible_os_family == 'Debian' %}
+Subsystem sftp /usr/lib/openssh/sftp-server -f AUTHPRIV -l INFO
+{% else %}
+Subsystem sftp /usr/libexec/openssh/sftp-server -f AUTHPRIV -l INFO
+{% endif %}
+
+# User/Group restrictions
+{% if ssh_allow_users %}
+AllowUsers {{ ssh_allow_users }}
+{% endif %}
+{% if ssh_allow_groups %}
+AllowGroups {{ ssh_allow_groups }}
+{% endif %}
+
+# Banner
+Banner /etc/issue.net
+
+# Host-based authentication
+HostbasedAuthentication no
+IgnoreRhosts yes

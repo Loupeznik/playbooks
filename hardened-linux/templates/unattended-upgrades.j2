@@ -1,0 +1,43 @@
+// Unattended Upgrades Configuration
+// Managed by Ansible - Do not edit manually
+
+// Allowed origins for automatic upgrades
+Unattended-Upgrade::Allowed-Origins {
+{% for origin in unattended_upgrades_origins %}
+    "{{ origin }}";
+{% endfor %}
+};
+
+// Package blacklist - packages that should not be automatically upgraded
+Unattended-Upgrade::Package-Blacklist {
+    // Add packages here that should not be auto-upgraded
+};
+
+// Auto-fix interrupted dpkg
+Unattended-Upgrade::AutoFixInterruptedDpkg "true";
+
+// Split the upgrade into smallest possible chunks
+Unattended-Upgrade::MinimalSteps "true";
+
+// Install updates for other packages
+Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+
+// Automatic reboot
+Unattended-Upgrade::Automatic-Reboot "{{ auto_updates_reboot | lower }}";
+
+{% if auto_updates_reboot %}
+// Reboot time
+Unattended-Upgrade::Automatic-Reboot-Time "{{ auto_updates_reboot_time }}";
+
+// Reboot even if users are logged in
+Unattended-Upgrade::Automatic-Reboot-WithUsers "false";
+{% endif %}
+
+// Email notifications
+// Unattended-Upgrade::Mail "root";
+// Unattended-Upgrade::MailReport "on-change";
+
+// Log to syslog
+Unattended-Upgrade::SyslogEnable "true";
+Unattended-Upgrade::SyslogFacility "daemon";

@@ -1,0 +1,409 @@
+---
+# Ubuntu Basic Security Hardening Playbook
+# This playbook applies core security hardening to Ubuntu 24.04 servers
+
+- name: Ubuntu Basic Security Hardening
+  hosts: ubuntu_servers
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Verify Ubuntu version
+      assert:
+        that:
+          - ansible_distribution == "Ubuntu"
+          - ansible_distribution_major_version|int >= 22
+        fail_msg: "This playbook requires Ubuntu 22.04 or newer"
+        success_msg: "Running on {{ ansible_distribution }} {{ ansible_distribution_version }}"
+
+  tasks:
+    # System Updates
+    - name: Update apt cache
+      apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist
+        autoremove: true
+        autoclean: true
+      register: upgrade_result
+
+    - name: Display upgrade results
+      debug:
+        msg: "System upgraded. Reboot may be required."
+      when: upgrade_result.changed
+
+    # Install Common Packages
+    - name: Install common packages
+      apt:
+        name: "{{ common_packages }}"
+        state: present
+
+    - name: Install security packages
+      apt:
+        name: "{{ security_packages }}"
+        state: present
+
+    # Remove Insecure Packages
+    - name: Remove insecure packages
+      apt:
+        name: "{{ packages_to_remove }}"
+        state: absent
+        purge: true
+      ignore_errors: true
+
+    # User Management
+    - name: Ensure admin user exists
+      user:
+        name: "{{ admin_username }}"
+        groups: "{{ admin_groups }}"
+        shell: "{{ admin_shell }}"
+        append: true
+        state: present
+
+    - name: Add SSH key for admin user
+      authorized_key:
+        user: "{{ admin_username }}"
+        key: "{{ admin_ssh_key }}"
+        state: present
+
+    - name: Set proper permissions on admin home
+      file:
+        path: "/home/{{ admin_username }}"
+        state: directory
+        owner: "{{ admin_username }}"
+        group: "{{ admin_username }}"
+        mode: '0750'
+
+    - name: Lock root account
+      user:
+        name: root
+        password_lock: true
+
+    # Password Policy
+    - name: Configure password quality requirements
+      lineinfile:
+        path: /etc/security/pwquality.conf
+        regexp: "^{{ item.key }}"
+        line: "{{ item.key }} = {{ item.value }}"
+      loop:
+        - { key: "minlen", value: "{{ password_min_length }}" }
+        - { key: "dcredit", value: "-{{ password_require_digit }}" }
+        - { key: "ucredit", value: "-{{ password_require_uppercase }}" }
+        - { key: "lcredit", value: "-{{ password_require_lowercase }}" }
+        - { key: "ocredit", value: "-{{ password_require_other }}" }
+
+    - name: Configure password aging
+      lineinfile:
+        path: /etc/login.defs
+        regexp: "^{{ item.key }}"
+        line: "{{ item.key }}\t{{ item.value }}"
+      loop:
+        - { key: "PASS_MAX_DAYS", value: "{{ password_max_days }}" }
+        - { key: "PASS_MIN_DAYS", value: "{{ password_min_days }}" }
+        - { key: "PASS_WARN_AGE", value: "{{ password_warn_age }}" }
+
+    # SSH Hardening
+    - name: Configure SSH daemon
+      template:
+        src: ../templates/sshd_config.j2
+        dest: "{{ ssh_config_file }}"
+        owner: root
+        group: root
+        mode: '0600'
+        validate: '/usr/sbin/sshd -t -f %s'
+        backup: true
+      notify: Restart SSH
+
+    - name: Create SSH banner
+      copy:
+        content: |
+          ******************************************************************
+          * This system is for authorized use only. All activity may be  *
+          * monitored and reported.                                       *
+          ******************************************************************
+        dest: /etc/issue.net
+        owner: root
+        group: root
+        mode: '0644'
+
+    # Firewall Configuration
+    - name: Uninstall UFW if present
+      apt:
+        name: ufw
+        state: absent
+        purge: true
+      ignore_errors: true
+
+    - name: Install firewalld
+      apt:
+        name: firewalld
+        state: present
+
+    - name: Ensure firewalld is enabled and started
+      systemd:
+        name: firewalld
+        enabled: true
+        state: started
+
+    - name: Configure firewalld default zone
+      command: firewall-cmd --set-default-zone=public
+      changed_when: false
+
+    - name: Remove unnecessary services from firewall
+      firewalld:
+        service: "{{ item }}"
+        permanent: true
+        state: disabled
+        immediate: true
+      loop:
+        - cockpit
+        - dhcpv6-client
+      ignore_errors: true
+
+    - name: Allow SSH through firewall
+      firewalld:
+        port: "{{ ssh_port }}/tcp"
+        permanent: true
+        state: enabled
+        immediate: true
+
+    - name: Allow additional TCP ports
+      firewalld:
+        port: "{{ item }}/tcp"
+        permanent: true
+        state: enabled
+        immediate: true
+      loop: "{{ firewall_allowed_tcp_ports }}"
+      when: firewall_allowed_tcp_ports | length > 0
+
+    - name: Allow additional UDP ports
+      firewalld:
+        port: "{{ item }}/udp"
+        permanent: true
+        state: enabled
+        immediate: true
+      loop: "{{ firewall_allowed_udp_ports }}"
+      when: firewall_allowed_udp_ports | length > 0
+
+    # Kernel Hardening
+    - name: Apply kernel hardening parameters
+      template:
+        src: ../templates/sysctl-hardening.conf.j2
+        dest: "{{ sysctl_config_file }}"
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Reload sysctl
+
+    # Disable Kernel Modules
+    - name: Disable unnecessary kernel modules
+      copy:
+        content: "install {{ item }} /bin/true\n"
+        dest: "/etc/modprobe.d/disable-{{ item }}.conf"
+        owner: root
+        group: root
+        mode: '0644'
+      loop: "{{ kernel_modules_blacklist }}"
+
+    # Auditd Configuration
+    - name: Configure auditd
+      template:
+        src: ../templates/audit-rules.j2
+        dest: "{{ audit_rules_file }}"
+        owner: root
+        group: root
+        mode: '0640'
+      notify: Restart auditd
+
+    - name: Ensure auditd is enabled and started
+      systemd:
+        name: "{{ audit_service }}"
+        enabled: true
+        state: started
+
+    # Fail2ban Configuration
+    - name: Configure fail2ban
+      template:
+        src: ../templates/fail2ban-jail.local.j2
+        dest: "{{ fail2ban_jail_local }}"
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart fail2ban
+
+    - name: Ensure fail2ban is enabled and started
+      systemd:
+        name: "{{ fail2ban_service }}"
+        enabled: true
+        state: started
+
+    # AIDE Configuration
+    - name: Initialize AIDE database
+      shell: aideinit
+      args:
+        creates: "{{ aide_db_path }}"
+      when: aide_enabled
+
+    - name: Create AIDE cron job
+      cron:
+        name: "AIDE integrity check"
+        minute: "{{ aide_cron_schedule_minute }}"
+        hour: "{{ aide_cron_schedule_hour }}"
+        job: "/usr/bin/aide --check | /usr/bin/mail -s 'AIDE Report for $(hostname)' {{ aide_email }}"
+        user: root
+      when: aide_enabled
+
+    # Automatic Updates
+    - name: Configure unattended-upgrades
+      template:
+        src: ../templates/unattended-upgrades.j2
+        dest: /etc/apt/apt.conf.d/50unattended-upgrades
+        owner: root
+        group: root
+        mode: '0644'
+      when: auto_updates_enabled
+
+    - name: Enable automatic updates
+      copy:
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+          APT::Periodic::AutocleanInterval "7";
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        owner: root
+        group: root
+        mode: '0644'
+      when: auto_updates_enabled
+
+    # AppArmor
+    - name: Ensure AppArmor is installed
+      apt:
+        name: "{{ apparmor_packages }}"
+        state: present
+
+    - name: Ensure AppArmor is enabled and enforcing
+      systemd:
+        name: apparmor
+        enabled: true
+        state: started
+
+    # Time Synchronization
+    - name: Configure systemd-timesyncd
+      template:
+        src: ../templates/timesyncd.conf.j2
+        dest: "{{ ntp_config_file }}"
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart timesyncd
+
+    - name: Ensure systemd-timesyncd is enabled
+      systemd:
+        name: "{{ ntp_service }}"
+        enabled: true
+        state: started
+
+    - name: Set timezone
+      timezone:
+        name: "{{ system_timezone }}"
+
+    # Disable Unnecessary Services
+    - name: Disable unnecessary services
+      systemd:
+        name: "{{ item }}"
+        enabled: false
+        state: stopped
+      loop: "{{ services_to_disable }}"
+      ignore_errors: true
+
+    # File System Hardening
+    - name: Configure shared memory with noexec
+      mount:
+        path: /dev/shm
+        src: tmpfs
+        fstype: tmpfs
+        opts: "defaults,nodev,nosuid,noexec,size={{ shared_memory_size }}M"
+        state: mounted
+
+    - name: Set default umask
+      lineinfile:
+        path: /etc/login.defs
+        regexp: '^UMASK'
+        line: "UMASK\t\t{{ umask_default }}"
+
+    - name: Set umask in profile
+      lineinfile:
+        path: /etc/profile
+        regexp: '^umask'
+        line: "umask {{ umask_default }}"
+
+    # Core Dumps
+    - name: Disable core dumps
+      copy:
+        content: |
+          * hard core 0
+          * soft core 0
+        dest: /etc/security/limits.d/10-disable-core-dumps.conf
+        owner: root
+        group: root
+        mode: '0644'
+      when: not enable_core_dumps
+
+    - name: Disable core dumps via sysctl
+      sysctl:
+        name: fs.suid_dumpable
+        value: '0'
+        state: present
+        reload: true
+      when: not enable_core_dumps
+
+    # Logging
+    - name: Ensure rsyslog is installed and running
+      systemd:
+        name: rsyslog
+        enabled: true
+        state: started
+
+    - name: Create secure log directory permissions
+      file:
+        path: /var/log
+        state: directory
+        mode: '0755'
+
+    # Final Checks
+    - name: Check if reboot is required
+      stat:
+        path: /var/run/reboot-required
+      register: reboot_required_file
+
+    - name: Display reboot message
+      debug:
+        msg: "REBOOT IS REQUIRED to complete hardening!"
+      when: reboot_required_file.stat.exists
+
+  handlers:
+    - name: Restart SSH
+      systemd:
+        name: "{{ ssh_service }}"
+        state: restarted
+
+    - name: Reload sysctl
+      command: sysctl -p {{ sysctl_config_file }}
+
+    - name: Restart auditd
+      systemd:
+        name: "{{ audit_service }}"
+        state: restarted
+
+    - name: Restart fail2ban
+      systemd:
+        name: "{{ fail2ban_service }}"
+        state: restarted
+
+    - name: Restart timesyncd
+      systemd:
+        name: "{{ ntp_service }}"
+        state: restarted

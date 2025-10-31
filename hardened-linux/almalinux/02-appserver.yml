@@ -1,0 +1,300 @@
+---
+# AlmaLinux Application Server Hardening Playbook
+# This playbook configures Nginx, Docker, and application-specific hardening
+# Run this AFTER 01-basic-setup.yml
+
+- name: AlmaLinux Application Server Hardening
+  hosts: almalinux_appservers
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Verify basic hardening is complete
+      stat:
+        path: /etc/sysctl.d/99-hardening.conf
+      register: basic_hardening
+      failed_when: not basic_hardening.stat.exists
+
+  tasks:
+    # Application User
+    - name: Create application user
+      user:
+        name: "{{ app_user }}"
+        group: "{{ app_group }}"
+        shell: "{{ app_user_shell }}"
+        home: "{{ app_user_home }}"
+        create_home: true
+        state: present
+      when: app_create_user
+
+    - name: Set resource limits for application user
+      pam_limits:
+        domain: "{{ item.domain }}"
+        limit_type: "{{ item.limit_type }}"
+        limit_item: "{{ item.limit_item }}"
+        value: "{{ item.value }}"
+      loop: "{{ app_user_limits }}"
+
+    # Application Directories
+    - name: Create application directories
+      file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop: "{{ app_directories }}"
+
+    # Nginx Installation and Configuration
+    - name: Install Nginx
+      dnf:
+        name: nginx
+        state: present
+      when: nginx_install
+
+    - name: Remove default Nginx configuration
+      file:
+        path: /etc/nginx/conf.d/default.conf
+        state: absent
+      when: nginx_install
+      notify: Restart nginx
+
+    - name: Configure Nginx
+      template:
+        src: ../templates/nginx.conf.j2
+        dest: /etc/nginx/nginx.conf
+        owner: root
+        group: root
+        mode: '0644'
+        validate: 'nginx -t -c %s'
+        backup: true
+      when: nginx_install
+      notify: Restart nginx
+
+    - name: Ensure Nginx log directory has correct permissions
+      file:
+        path: /var/log/nginx
+        state: directory
+        owner: nginx
+        group: nginx
+        mode: '0750'
+      when: nginx_install
+
+    - name: Configure Nginx log rotation
+      copy:
+        content: |
+          /var/log/nginx/*.log {
+              daily
+              missingok
+              rotate 14
+              compress
+              delaycompress
+              notifempty
+              create 0640 nginx nginx
+              sharedscripts
+              postrotate
+                  /bin/kill -USR1 `cat /run/nginx.pid 2>/dev/null` 2>/dev/null || true
+              endscript
+          }
+        dest: /etc/logrotate.d/nginx
+        owner: root
+        group: root
+        mode: '0644'
+      when: nginx_install
+
+    - name: Configure SELinux boolean for Nginx
+      seboolean:
+        name: "{{ item }}"
+        state: true
+        persistent: true
+      loop:
+        - httpd_can_network_connect
+        - httpd_setrlimit
+      when: nginx_install
+
+    - name: Ensure Nginx is enabled and started
+      systemd:
+        name: nginx
+        enabled: true
+        state: started
+      when: nginx_install
+
+    # Docker Installation and Configuration
+    - name: Add Docker repository
+      yum_repository:
+        name: docker-ce
+        description: Docker CE Repository
+        baseurl: "https://download.docker.com/linux/centos/$releasever/$basearch/stable"
+        gpgcheck: true
+        gpgkey: https://download.docker.com/linux/centos/gpg
+        enabled: true
+      when: docker_install
+
+    - name: Install Docker
+      dnf:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+      when: docker_install
+
+    - name: Create Docker configuration directory
+      file:
+        path: /etc/docker
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      when: docker_install
+
+    - name: Configure Docker daemon
+      copy:
+        content: "{{ docker_daemon_config | to_nice_json }}"
+        dest: /etc/docker/daemon.json
+        owner: root
+        group: root
+        mode: '0644'
+      when: docker_install
+      notify: Restart docker
+
+    - name: Add users to docker group
+      user:
+        name: "{{ item }}"
+        groups: docker
+        append: true
+      loop: "{{ docker_users }}"
+      when: docker_install
+
+    - name: Configure SELinux for Docker
+      seboolean:
+        name: container_manage_cgroup
+        state: true
+        persistent: true
+      when: docker_install
+
+    - name: Ensure Docker is enabled and started
+      systemd:
+        name: docker
+        enabled: true
+        state: started
+      when: docker_install
+
+    - name: Configure Docker log rotation
+      copy:
+        content: |
+          /var/lib/docker/containers/*/*.log {
+              rotate 7
+              daily
+              compress
+              missingok
+              delaycompress
+              copytruncate
+          }
+        dest: /etc/logrotate.d/docker
+        owner: root
+        group: root
+        mode: '0644'
+      when: docker_install
+
+    # Firewall Configuration for App Server
+    - name: Allow HTTP traffic
+      firewalld:
+        service: http
+        permanent: true
+        state: enabled
+        immediate: true
+
+    - name: Allow HTTPS traffic
+      firewalld:
+        service: https
+        permanent: true
+        state: enabled
+        immediate: true
+
+    - name: Allow additional app server ports
+      firewalld:
+        port: "{{ item }}/tcp"
+        permanent: true
+        state: enabled
+        immediate: true
+      loop: "{{ firewall_appserver_tcp_ports }}"
+      when:
+        - firewall_appserver_tcp_ports is defined
+        - firewall_appserver_tcp_ports | length > 0
+        - item not in [80, 443]
+
+    # Application-specific fail2ban filters
+    - name: Add Nginx fail2ban filter
+      copy:
+        content: |
+          # Fail2Ban filter for Nginx auth failures
+          [Definition]
+          failregex = ^<HOST> -.*"(GET|POST).*HTTP.*" 401
+                      ^<HOST> -.*"(GET|POST).*HTTP.*" 403
+          ignoreregex =
+        dest: /etc/fail2ban/filter.d/nginx-auth.conf
+        owner: root
+        group: root
+        mode: '0644'
+      when: nginx_install
+      notify: Restart fail2ban
+
+    # Monitoring
+    - name: Create Nginx status monitoring endpoint (internal only)
+      copy:
+        content: |
+          server {
+              listen 127.0.0.1:8080;
+              server_name localhost;
+              location /nginx_status {
+                  stub_status on;
+                  access_log off;
+                  allow 127.0.0.1;
+                  deny all;
+              }
+          }
+        dest: /etc/nginx/conf.d/status.conf
+        owner: root
+        group: root
+        mode: '0644'
+      when: nginx_install
+      notify: Restart nginx
+
+    # Final Message
+    - name: Display completion message
+      debug:
+        msg: |
+          ========================================
+          Application Server Hardening Complete!
+          ========================================
+          - Nginx installed and configured
+          - Docker installed and hardened
+          - Application user created
+          - Firewall rules applied
+          - SELinux configured
+          - Logs configured
+
+          Next Steps:
+          1. Deploy your applications
+          2. Configure SSL certificates
+          3. Set up application-specific Nginx configs in /etc/nginx/conf.d/
+          4. Test connectivity and security
+
+  handlers:
+    - name: Restart nginx
+      systemd:
+        name: nginx
+        state: restarted
+
+    - name: Restart docker
+      systemd:
+        name: docker
+        state: restarted
+
+    - name: Restart fail2ban
+      systemd:
+        name: fail2ban
+        state: restarted
