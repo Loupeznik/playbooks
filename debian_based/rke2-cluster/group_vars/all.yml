@@ -1,0 +1,35 @@
+---
+# Package lists
+required_packages:
+  - curl
+  - wget
+  - ca-certificates
+  - net-tools
+  - iptables
+  - vim
+  - chrony
+
+# DNS servers
+dns_servers:
+  - 8.8.8.8
+  - 8.8.4.4
+
+# Firewall configuration
+manage_firewall: true
+disable_apparmor: false
+
+# Control plane ports
+controlplane_ports:
+  - { port: 22, proto: tcp, comment: "SSH" }
+  - { port: 6443, proto: tcp, comment: "Kubernetes API" }
+  - { port: 9345, proto: tcp, comment: "RKE2 supervisor API" }
+  - { port: "2379:2380", proto: tcp, comment: "etcd" }
+  - { port: 10250, proto: tcp, comment: "Kubelet" }
+  - { port: "30000:32767", proto: tcp, comment: "NodePort services" }
+
+# Worker ports
+worker_ports:
+  - { port: 22, proto: tcp, comment: "SSH" }
+  - { port: 9345, proto: tcp, comment: "RKE2 supervisor API" }
+  - { port: 10250, proto: tcp, comment: "Kubelet" }
+  - { port: "30000:32767", proto: tcp, comment: "NodePort services" }

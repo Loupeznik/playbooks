@@ -1,0 +1,20 @@
+all:
+  children:
+    controlplane:
+      hosts:
+        master-01:
+          ansible_host: 192.168.1.100
+        master-02:
+          ansible_host: 192.168.1.101
+        master-03:
+          ansible_host: 192.168.1.102
+    workers:
+      hosts:
+        worker-01:
+          ansible_host: 192.168.1.110
+        worker-02:
+          ansible_host: 192.168.1.111
+  vars:
+    ansible_user: ubuntu
+    ansible_become: yes
+    ansible_ssh_private_key_file: ~/.ssh/id_rsa
