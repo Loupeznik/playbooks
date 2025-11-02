@@ -1,0 +1,14 @@
+{% for zone in dns_zones %}
+zone "{{ zone.domain }}" {
+    type master;
+    file "/etc/bind/zones/db.{{ zone.domain }}";
+};
+
+{% if zone.reverse_zone is defined %}
+zone "{{ zone.reverse_zone }}" {
+    type master;
+    file "/etc/bind/zones/db.{{ zone.reverse_zone }}";
+};
+{% endif %}
+
+{% endfor %}

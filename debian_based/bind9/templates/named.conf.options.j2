@@ -1,0 +1,19 @@
+options {
+    directory "/var/cache/bind";
+
+    recursion {{ bind9_recursion }};
+    listen-on { {{ bind9_listen_on }}; };
+    listen-on-v6 { {{ bind9_listen_on_v6 }}; };
+
+    allow-query { {% for item in bind9_allow_query %}{{ item }}; {% endfor %}};
+
+    forwarders {
+{% for forwarder in bind9_forwarders %}
+        {{ forwarder }};
+{% endfor %}
+    };
+
+    dnssec-validation {{ bind9_dnssec_validation }};
+
+    auth-nxdomain no;
+};

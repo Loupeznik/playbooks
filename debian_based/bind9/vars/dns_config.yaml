@@ -1,0 +1,37 @@
+---
+bind9_listen_on_v6: "any"
+bind9_listen_on: "any"
+bind9_allow_query:
+  - "any"
+bind9_forwarders:
+  - "8.8.8.8"
+  - "8.8.4.4"
+bind9_recursion: "yes"
+bind9_dnssec_validation: "auto"
+
+configure_firewall: false
+
+dns_server_primary: "ns1.pve-prod-02.dzarsky.cloud"
+dns_server_email: "admin.pve-prod-02.dzarsky.cloud"
+
+dns_zones:
+  - domain: "pve-prod-02.dzarsky.cloud"
+    network: "10.13.37.0"
+    netmask: "255.255.255.0"
+    reverse_zone: "11.37.13.in-addr.arpa"
+    ttl: 604800
+    refresh: 604800
+    retry: 86400
+    expire: 2419200
+    negative_cache_ttl: 604800
+    serial: 1
+    records:
+      - name: "ns1"
+        type: "A"
+        value: "10.13.37.135"
+      - name: "@"
+        type: "NS"
+        value: "ns1.pve-prod-02.dzarsky.cloud."
+      - name: "test"
+        type: "A"
+        value: "10.13.37.37"

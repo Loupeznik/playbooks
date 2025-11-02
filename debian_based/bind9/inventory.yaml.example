@@ -1,0 +1,7 @@
+---
+dns_servers:
+  hosts:
+    dns-01:
+      ansible_host: 10.13.37.135
+      ansible_user: ubuntu
+      ansible_ssh_private_key_file: ~/.ssh/id_rsa

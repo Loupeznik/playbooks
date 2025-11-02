@@ -1,0 +1,16 @@
+$TTL    {{ item.ttl }}
+@       IN      SOA     {{ dns_server_primary }}. {{ dns_server_email }}. (
+                        {{ item.serial }}         ; Serial
+                        {{ item.refresh }}        ; Refresh
+                        {{ item.retry }}          ; Retry
+                        {{ item.expire }}         ; Expire
+                        {{ item.negative_cache_ttl }} ) ; Negative Cache TTL
+
+@       IN      NS      {{ dns_server_primary }}.
+
+{% for record in item.records %}
+{% if record.type == 'A' %}
+{% set octets = record.value.split('.') %}
+{{ octets[3] }}    IN      PTR     {{ record.name }}.{{ item.domain }}.
+{% endif %}
+{% endfor %}
