@@ -1,0 +1,291 @@
+---
+# Central Monitoring Stack Playbook
+# Deploys VictoriaMetrics, Grafana Loki, Grafana, and Alertmanager
+# Run this on the dedicated monitoring server
+
+- name: Deploy Central Monitoring Stack
+  hosts: monitoring_server
+  become: true
+  gather_facts: true
+
+  vars:
+    victoria_metrics_version: "1.96.0"
+    grafana_version: "10.2.3"
+    loki_version: "2.9.3"
+    alertmanager_version: "0.26.0"
+
+  pre_tasks:
+    - name: Verify this is the monitoring server
+      assert:
+        that:
+          - "'monitoring_server' in group_names"
+        fail_msg: "This playbook should only run on the monitoring server"
+
+    - name: Ensure monitoring data directories exist
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /opt/monitoring
+        - /var/lib/victoriametrics
+        - /var/lib/loki
+        - /var/lib/alertmanager
+        - /etc/victoriametrics
+        - /etc/loki
+        - /etc/alertmanager
+
+  tasks:
+    # VictoriaMetrics Installation
+    - name: Download VictoriaMetrics
+      get_url:
+        url: "https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/v{{ victoria_metrics_version }}/victoria-metrics-linux-amd64-v{{ victoria_metrics_version }}.tar.gz"
+        dest: /tmp/victoriametrics.tar.gz
+        mode: '0644'
+
+    - name: Extract VictoriaMetrics
+      unarchive:
+        src: /tmp/victoriametrics.tar.gz
+        dest: /opt/monitoring/
+        remote_src: yes
+        creates: /opt/monitoring/victoria-metrics-prod
+
+    - name: Create VictoriaMetrics systemd service
+      copy:
+        dest: /etc/systemd/system/victoriametrics.service
+        content: |
+          [Unit]
+          Description=VictoriaMetrics Time Series Database
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=root
+          ExecStart=/opt/monitoring/victoria-metrics-prod \
+            -storageDataPath=/var/lib/victoriametrics \
+            -httpListenAddr=:8428 \
+            -retentionPeriod=90d \
+            -promscrape.config=/etc/victoriametrics/scrape.yml
+          Restart=always
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart victoriametrics
+
+    - name: Deploy VictoriaMetrics scrape configuration
+      template:
+        src: ../templates/victoriametrics-scrape.yml.j2
+        dest: /etc/victoriametrics/scrape.yml
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart victoriametrics
+
+    # Grafana Loki Installation
+    - name: Download Loki
+      get_url:
+        url: "https://github.com/grafana/loki/releases/download/v{{ loki_version }}/loki-linux-amd64.zip"
+        dest: /tmp/loki.zip
+        mode: '0644'
+
+    - name: Extract Loki
+      unarchive:
+        src: /tmp/loki.zip
+        dest: /usr/local/bin/
+        remote_src: yes
+        creates: /usr/local/bin/loki-linux-amd64
+
+    - name: Create Loki config
+      template:
+        src: ../templates/loki-config.yml.j2
+        dest: /etc/loki/loki-config.yml
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart loki
+
+    - name: Create Loki systemd service
+      copy:
+        dest: /etc/systemd/system/loki.service
+        content: |
+          [Unit]
+          Description=Loki Log Aggregation System
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=root
+          ExecStart=/usr/local/bin/loki-linux-amd64 -config.file=/etc/loki/loki-config.yml
+          Restart=always
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart loki
+
+    # Alertmanager Installation
+    - name: Download Alertmanager
+      get_url:
+        url: "https://github.com/prometheus/alertmanager/releases/download/v{{ alertmanager_version }}/alertmanager-{{ alertmanager_version }}.linux-amd64.tar.gz"
+        dest: /tmp/alertmanager.tar.gz
+        mode: '0644'
+
+    - name: Extract Alertmanager
+      unarchive:
+        src: /tmp/alertmanager.tar.gz
+        dest: /opt/monitoring/
+        remote_src: yes
+        creates: /opt/monitoring/alertmanager-{{ alertmanager_version }}.linux-amd64
+
+    - name: Create Alertmanager symlink
+      file:
+        src: /opt/monitoring/alertmanager-{{ alertmanager_version }}.linux-amd64
+        dest: /opt/monitoring/alertmanager
+        state: link
+
+    - name: Deploy Alertmanager configuration
+      template:
+        src: ../templates/alertmanager.yml.j2
+        dest: /etc/alertmanager/alertmanager.yml
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart alertmanager
+
+    - name: Create Alertmanager systemd service
+      copy:
+        dest: /etc/systemd/system/alertmanager.service
+        content: |
+          [Unit]
+          Description=Alertmanager
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=root
+          ExecStart=/opt/monitoring/alertmanager/alertmanager \
+            --config.file=/etc/alertmanager/alertmanager.yml \
+            --storage.path=/var/lib/alertmanager
+          Restart=always
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Restart alertmanager
+
+    # Grafana Installation
+    - name: Add Grafana repository (RedHat)
+      yum_repository:
+        name: grafana
+        description: Grafana Repository
+        baseurl: https://rpm.grafana.com
+        gpgcheck: yes
+        gpgkey: https://rpm.grafana.com/gpg.key
+        enabled: yes
+      when: ansible_os_family == 'RedHat'
+
+    - name: Add Grafana repository (Debian)
+      block:
+        - name: Add Grafana GPG key
+          apt_key:
+            url: https://apt.grafana.com/gpg.key
+            state: present
+
+        - name: Add Grafana apt repository
+          apt_repository:
+            repo: "deb https://apt.grafana.com stable main"
+            state: present
+      when: ansible_os_family == 'Debian'
+
+    - name: Install Grafana
+      package:
+        name: grafana
+        state: present
+
+    - name: Deploy Grafana datasources
+      template:
+        src: ../templates/grafana-datasources.yml.j2
+        dest: /etc/grafana/provisioning/datasources/datasources.yml
+        owner: root
+        group: grafana
+        mode: '0640'
+      notify: Restart grafana
+
+    - name: Enable and start all monitoring services
+      systemd:
+        name: "{{ item }}"
+        state: started
+        enabled: yes
+        daemon_reload: yes
+      loop:
+        - victoriametrics
+        - loki
+        - alertmanager
+        - grafana-server
+
+    - name: Wait for services to start
+      wait_for:
+        port: "{{ item }}"
+        timeout: 30
+      loop:
+        - 8428  # VictoriaMetrics
+        - 3100  # Loki
+        - 9093  # Alertmanager
+        - 3000  # Grafana
+
+  handlers:
+    - name: Restart victoriametrics
+      systemd:
+        name: victoriametrics
+        state: restarted
+
+    - name: Restart loki
+      systemd:
+        name: loki
+        state: restarted
+
+    - name: Restart alertmanager
+      systemd:
+        name: alertmanager
+        state: restarted
+
+    - name: Restart grafana
+      systemd:
+        name: grafana-server
+        state: restarted
+
+  post_tasks:
+    - name: Display monitoring stack information
+      debug:
+        msg: |
+          ========================================
+          Central Monitoring Stack Deployed!
+          ========================================
+
+          VictoriaMetrics: http://{{ ansible_default_ipv4.address }}:8428
+          Grafana Loki:    http://{{ ansible_default_ipv4.address }}:3100
+          Grafana:         http://{{ ansible_default_ipv4.address }}:3000
+          Alertmanager:    http://{{ ansible_default_ipv4.address }}:9093
+
+          Default Grafana credentials:
+          Username: admin
+          Password: admin (change immediately!)
+
+          Next Steps:
+          1. Access Grafana and change default password
+          2. Import dashboards from grafana.com
+          3. Configure alert notification channels
+          4. Verify metrics are being scraped
+          5. Check log ingestion from Alloy agents

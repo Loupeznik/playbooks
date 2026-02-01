@@ -1,0 +1,65 @@
+---
+# WireGuard VPN Setup Playbook
+# Establishes encrypted site-to-site VPN for secure monitoring traffic
+# Run this BEFORE installing monitoring agents for maximum security
+
+- name: Setup WireGuard VPN for Secure Monitoring
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    wireguard_port: 51820
+    wireguard_network: "10.100.0.0/24"
+
+  pre_tasks:
+    - name: Verify WireGuard is enabled
+      assert:
+        that:
+          - wireguard_enabled | default(true)
+        fail_msg: "WireGuard is disabled. Set wireguard_enabled: true in inventory"
+
+    - name: Verify WireGuard IP is assigned
+      assert:
+        that:
+          - wireguard_client_ip is defined
+        fail_msg: "WireGuard IP not assigned. Define wireguard_client_ip in host_vars"
+
+  tasks:
+    - name: Install and configure WireGuard
+      include_role:
+        name: wireguard
+
+    - name: Display WireGuard status
+      command: wg show
+      register: wg_status
+      changed_when: false
+
+    - name: Show WireGuard configuration
+      debug:
+        var: wg_status.stdout_lines
+
+  post_tasks:
+    - name: Test connectivity to monitoring server
+      wait_for:
+        host: "{{ hostvars[monitoring_server_host].wireguard_client_ip }}"
+        port: 22
+        timeout: 10
+      when: inventory_hostname != monitoring_server_host
+      register: connectivity_test
+      ignore_errors: true
+
+    - name: Display connectivity status
+      debug:
+        msg: |
+          ========================================
+          WireGuard VPN Setup Complete!
+          ========================================
+          Local WireGuard IP: {{ wireguard_client_ip }}
+          Monitoring Server: {{ hostvars[monitoring_server_host].wireguard_client_ip }}
+          Network: {{ wireguard_network }}
+
+          Next Steps:
+          1. Verify connectivity: ping {{ hostvars[monitoring_server_host].wireguard_client_ip }}
+          2. Run monitoring agents playbook
+          3. Configure firewall rules for WireGuard subnet

@@ -93,3 +93,12 @@ Inventory files should be stored in the `inventories/` directory (gitignored).
 - Use `connection: local` and `hosts: 'local'` for local execution
 - Require API credentials (api_user, api_token_id, api_token_secret, api_host)
 - Container network configuration is passed as JSON string in netif parameter
+
+### Python and Virtual Environments
+
+- **ALWAYS** use Python virtual environments for package installation, never install packages system-wide using `pip` or `pip3`
+- Create virtual environment: `python3 -m venv venv`
+- Activate before installing packages: `source venv/bin/activate`
+- Install Ansible and required Python packages within the virtual environment
+- When documenting setup instructions in markdown files, always include virtual environment setup as the first step
+- This prevents system package conflicts and ensures reproducible environments across different machines

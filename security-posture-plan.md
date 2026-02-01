@@ -26,7 +26,7 @@ This document outlines a complete security improvement strategy for Ubuntu 24.04
 |-----------|------|---------|
 | Metrics Collection | **VictoriaMetrics** | Drop-in Prometheus replacement, lower resource usage |
 | Log Aggregation | **Grafana Loki** | Lightweight log aggregation (vs ELK) |
-| Log Shipper | **Promtail / Vector** | Ship logs to Loki |
+| Log Shipper | **Grafana Alloy** | Ship logs to Loki (Promtail successor, EOL Mar 2026) |
 | Visualization | **Grafana** | Unified dashboards for metrics and logs |
 | Alerting | **Alertmanager** | Alert routing and deduplication |
 | Host Metrics | **node_exporter** | System metrics |
@@ -60,7 +60,7 @@ This document outlines a complete security improvement strategy for Ubuntu 24.04
 ┌───────────┴──────────────────┴──────────────────────────────────────────────┐
 │                              ALL MANAGED HOSTS                              │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────────┐  │
-│  │  node_exporter  │  │    Promtail     │  │    OpenSCAP / Lynis         │  │
+│  │  node_exporter  │  │  Grafana Alloy  │  │    OpenSCAP / Lynis         │  │
 │  │  (metrics)      │  │    (logs)       │  │    (compliance scans)       │  │
 │  └─────────────────┘  └─────────────────┘  └─────────────────────────────┘  │
 │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────────┐  │
@@ -94,7 +94,7 @@ ansible-security/
 │   ├── security-hardening.yml      # Base hardening
 │   ├── compliance-scanning.yml     # CIS/OpenSCAP
 │   ├── monitoring-agents.yml       # Install exporters
-│   ├── logging-agents.yml          # Install Promtail
+│   ├── logging-agents.yml          # Install Grafana Alloy
 │   ├── automatic-updates.yml       # Configure auto-updates
 │   ├── container-security.yml      # Docker hardening + Trivy
 │   └── drift-detection.yml         # Configuration drift checks
@@ -109,14 +109,14 @@ ansible-security/
 │   ├── node_exporter/              # Prometheus node metrics
 │   ├── postgres_exporter/          # PostgreSQL metrics
 │   ├── nginx_exporter/             # Nginx metrics
-│   ├── promtail/                   # Log shipping
+│   ├── alloy/                      # Log shipping (Grafana Alloy)
 │   ├── automatic_updates/          # dnf-automatic/unattended-upgrades
 │   └── docker_security/            # Docker hardening
 ├── files/
 │   ├── openscap/
 │   │   └── tailoring/              # Custom CIS profiles
-│   └── promtail/
-│       └── config.yml
+│   └── alloy/
+│       └── config.river
 ├── templates/
 │   ├── alerting/
 │   │   └── rules/*.yml
@@ -766,247 +766,337 @@ Unattended-Upgrade::SyslogFacility "daemon";
 
 ### Phase 4: Central Logging & Monitoring (Week 3-4)
 
-#### 4.6 Promtail Log Shipper Role
+#### 4.6 Grafana Alloy Log Shipper Role
 
 ```yaml
-# roles/promtail/tasks/main.yml
+# roles/alloy/tasks/main.yml
 ---
-- name: Create promtail user
+- name: Create alloy user
   user:
-    name: promtail
+    name: alloy
     system: yes
     shell: /usr/sbin/nologin
-    home: /var/lib/promtail
+    home: /var/lib/alloy
     create_home: yes
 
-- name: Download Promtail binary
+- name: Download Grafana Alloy binary
   get_url:
-    url: "https://github.com/grafana/loki/releases/download/v{{ promtail_version }}/promtail-linux-amd64.zip"
-    dest: /tmp/promtail.zip
+    url: "https://github.com/grafana/alloy/releases/download/v{{ alloy_version }}/alloy-linux-amd64.zip"
+    dest: /tmp/alloy.zip
     mode: '0644'
 
-- name: Extract Promtail
+- name: Extract Alloy
   unarchive:
-    src: /tmp/promtail.zip
+    src: /tmp/alloy.zip
     dest: /usr/local/bin/
     remote_src: yes
     mode: '0755'
 
-- name: Create Promtail config directory
+- name: Create Alloy config directory
   file:
-    path: /etc/promtail
+    path: /etc/alloy
     state: directory
     mode: '0755'
 
-- name: Deploy Promtail configuration
+- name: Deploy Alloy configuration
   template:
-    src: promtail.yml.j2
-    dest: /etc/promtail/promtail.yml
+    src: config.river.j2
+    dest: /etc/alloy/config.river
     mode: '0644'
-  notify: Restart promtail
+  notify: Restart alloy
 
-- name: Create Promtail systemd service
+- name: Create Alloy systemd service
   template:
-    src: promtail.service.j2
-    dest: /etc/systemd/system/promtail.service
+    src: alloy.service.j2
+    dest: /etc/systemd/system/alloy.service
     mode: '0644'
-  notify: 
+  notify:
     - Reload systemd
-    - Restart promtail
+    - Restart alloy
 
-- name: Add promtail to required groups for log access
+- name: Add alloy to required groups for log access
   user:
-    name: promtail
-    groups: 
+    name: alloy
+    groups:
       - adm
       - systemd-journal
     append: yes
 
-- name: Start and enable Promtail
+- name: Start and enable Alloy
   systemd:
-    name: promtail
+    name: alloy
     state: started
     enabled: yes
 ```
 
-```yaml
-# roles/promtail/templates/promtail.yml.j2
-server:
-  http_listen_port: 9080
-  grpc_listen_port: 0
+```river
+# roles/alloy/templates/config.river.j2
+// Grafana Alloy Configuration
+// Component-based configuration for log collection and forwarding
 
-positions:
-  filename: /var/lib/promtail/positions.yaml
+// Loki write endpoint
+loki.write "default" {
+  endpoint {
+    url = "http://{{ loki_server }}:3100/loki/api/v1/push"
+    tenant_id = "{{ tenant_id | default('default') }}"
+  }
+}
 
-clients:
-  - url: http://{{ loki_server }}:3100/loki/api/v1/push
-    tenant_id: {{ tenant_id | default('default') }}
+// Log sources:
+// System logs
+loki.source.file "syslog" {
+  targets = [
+    {
+      __path__ = "/var/log/syslog",
+      job = "syslog",
+      host = "{{ inventory_hostname }}",
+      env = "{{ environment | default('production') }}",
+    },
+  ]
+  forward_to = [loki.process.syslog.receiver]
+}
 
-scrape_configs:
-  # System logs
-  - job_name: syslog
-    static_configs:
-      - targets:
-          - localhost
-        labels:
-          job: syslog
-          host: {{ inventory_hostname }}
-          env: {{ environment | default('production') }}
-          __path__: /var/log/syslog
-    pipeline_stages:
-      - regex:
-          expression: '^(?P<timestamp>\w+\s+\d+\s+\d+:\d+:\d+)\s+(?P<hostname>\S+)\s+(?P<app>\S+?)(\[(?P<pid>\d+)\])?:\s+(?P<message>.*)$'
-      - labels:
-          app:
-      - timestamp:
-          source: timestamp
-          format: "Jan 2 15:04:05"
+loki.process "syslog" {
+  stage.regex {
+    expression = "^(?P<timestamp>\\w+\\s+\\d+\\s+\\d+:\\d+:\\d+)\\s+(?P<hostname>\\S+)\\s+(?P<app>\\S+?)(\\[(?P<pid>\\d+)\\])?:\\s+(?P<message>.*)$"
+  }
 
-  # Auth logs (SSH, sudo, etc.)
-  - job_name: auth
-    static_configs:
-      - targets:
-          - localhost
-        labels:
-          job: auth
-          host: {{ inventory_hostname }}
-          __path__: /var/log/auth.log
-    pipeline_stages:
-      - match:
-          selector: '{job="auth"}'
-          stages:
-            - regex:
-                expression: '(?P<action>Failed|Accepted|Invalid|session opened|session closed)'
-            - labels:
-                action:
+  stage.labels {
+    values = {
+      app = "",
+    }
+  }
 
-  # Audit logs
-  - job_name: audit
-    static_configs:
-      - targets:
-          - localhost
-        labels:
-          job: audit
-          host: {{ inventory_hostname }}
-          __path__: /var/log/audit/audit.log
+  stage.timestamp {
+    source = "timestamp"
+    format = "Jan 2 15:04:05"
+  }
 
-  # Firewall logs (firewalld)
-  - job_name: firewall
-    static_configs:
-      - targets:
-          - localhost
-        labels:
-          job: firewall
-          host: {{ inventory_hostname }}
-          __path__: /var/log/firewalld
-    pipeline_stages:
-      - regex:
-          expression: '.*?(?P<action>ACCEPT|DROP|REJECT).*'
-      - labels:
-          action:
+  forward_to = [loki.write.default.receiver]
+}
 
-  # Journal (systemd)
-  - job_name: journal
-    journal:
-      max_age: 12h
-      labels:
-        job: systemd-journal
-        host: {{ inventory_hostname }}
-    relabel_configs:
-      - source_labels: ['__journal__systemd_unit']
-        target_label: 'unit'
-      - source_labels: ['__journal__hostname']
-        target_label: 'hostname'
-      - source_labels: ['__journal_priority_keyword']
-        target_label: 'level'
+// Auth logs (SSH, sudo, etc.)
+loki.source.file "auth" {
+  targets = [
+    {
+      __path__ = "/var/log/auth.log",
+      job = "auth",
+      host = "{{ inventory_hostname }}",
+    },
+  ]
+  forward_to = [loki.process.auth.receiver]
+}
+
+loki.process "auth" {
+  stage.regex {
+    expression = "(?P<action>Failed|Accepted|Invalid|session opened|session closed)"
+  }
+
+  stage.labels {
+    values = {
+      action = "",
+    }
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+// Audit logs
+loki.source.file "audit" {
+  targets = [
+    {
+      __path__ = "/var/log/audit/audit.log",
+      job = "audit",
+      host = "{{ inventory_hostname }}",
+    },
+  ]
+  forward_to = [loki.write.default.receiver]
+}
+
+// Firewall logs (firewalld)
+loki.source.file "firewall" {
+  targets = [
+    {
+      __path__ = "/var/log/firewalld",
+      job = "firewall",
+      host = "{{ inventory_hostname }}",
+    },
+  ]
+  forward_to = [loki.process.firewall.receiver]
+}
+
+loki.process "firewall" {
+  stage.regex {
+    expression = ".*?(?P<action>ACCEPT|DROP|REJECT).*"
+  }
+
+  stage.labels {
+    values = {
+      action = "",
+    }
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+// Journal (systemd)
+loki.source.journal "systemd" {
+  max_age = "12h"
+  labels = {
+    job = "systemd-journal",
+    host = "{{ inventory_hostname }}",
+  }
+
+  relabel_rules {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+
+  relabel_rules {
+    source_labels = ["__journal__hostname"]
+    target_label  = "hostname"
+  }
+
+  relabel_rules {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
 
 {% if 'app_servers' in group_names %}
-  # Nginx access logs
-  - job_name: nginx_access
-    static_configs:
-      - targets:
-          - localhost
-        labels:
-          job: nginx_access
-          host: {{ inventory_hostname }}
-          __path__: /var/log/nginx/access.log
-    pipeline_stages:
-      - regex:
-          expression: '^(?P<remote_addr>\S+) - (?P<remote_user>\S+) \[(?P<time_local>[^\]]+)\] "(?P<method>\S+) (?P<request_uri>\S+) (?P<protocol>\S+)" (?P<status>\d+) (?P<body_bytes_sent>\d+) "(?P<http_referer>[^"]*)" "(?P<http_user_agent>[^"]*)"'
-      - labels:
-          method:
-          status:
-      - metrics:
-          http_requests_total:
-            type: Counter
-            description: "Total HTTP requests"
-            source: status
-            config:
-              action: inc
+// Nginx access logs
+loki.source.file "nginx_access" {
+  targets = [
+    {
+      __path__ = "/var/log/nginx/access.log",
+      job = "nginx_access",
+      host = "{{ inventory_hostname }}",
+    },
+  ]
+  forward_to = [loki.process.nginx_access.receiver]
+}
 
-  # Nginx error logs
-  - job_name: nginx_error
-    static_configs:
-      - targets:
-          - localhost
-        labels:
-          job: nginx_error
-          host: {{ inventory_hostname }}
-          __path__: /var/log/nginx/error.log
+loki.process "nginx_access" {
+  stage.regex {
+    expression = "^(?P<remote_addr>\\S+) - (?P<remote_user>\\S+) \\[(?P<time_local>[^\\]]+)\\] \"(?P<method>\\S+) (?P<request_uri>\\S+) (?P<protocol>\\S+)\" (?P<status>\\d+) (?P<body_bytes_sent>\\d+) \"(?P<http_referer>[^\"]*)\" \"(?P<http_user_agent>[^\"]*)\""
+  }
+
+  stage.labels {
+    values = {
+      method = "",
+      status = "",
+    }
+  }
+
+  stage.metrics {
+    metric.counter {
+      name        = "http_requests_total"
+      description = "Total HTTP requests"
+      source      = "status"
+      action      = "inc"
+    }
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+// Nginx error logs
+loki.source.file "nginx_error" {
+  targets = [
+    {
+      __path__ = "/var/log/nginx/error.log",
+      job = "nginx_error",
+      host = "{{ inventory_hostname }}",
+    },
+  ]
+  forward_to = [loki.write.default.receiver]
+}
 {% endif %}
 
 {% if 'db_servers' in group_names %}
-  # PostgreSQL logs
-  - job_name: postgresql
-    static_configs:
-      - targets:
-          - localhost
-        labels:
-          job: postgresql
-          host: {{ inventory_hostname }}
-          __path__: /var/log/postgresql/*.log
-    pipeline_stages:
-      - multiline:
-          firstline: '^\d{4}-\d{2}-\d{2}'
-      - regex:
-          expression: '^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+) \w+ \[(?P<pid>\d+)\] (?P<level>\w+):'
-      - labels:
-          level:
+// PostgreSQL logs
+loki.source.file "postgresql" {
+  targets = [
+    {
+      __path__ = "/var/log/postgresql/*.log",
+      job = "postgresql",
+      host = "{{ inventory_hostname }}",
+    },
+  ]
+  forward_to = [loki.process.postgresql.receiver]
+}
 
-  # pgAudit logs (if enabled)
-  - job_name: pgaudit
-    static_configs:
-      - targets:
-          - localhost
-        labels:
-          job: pgaudit
-          host: {{ inventory_hostname }}
-          __path__: /var/log/postgresql/pgaudit.log
+loki.process "postgresql" {
+  stage.multiline {
+    firstline     = "^\\d{4}-\\d{2}-\\d{2}"
+    max_wait_time = "3s"
+  }
+
+  stage.regex {
+    expression = "^(?P<timestamp>\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\.\\d+) \\w+ \\[(?P<pid>\\d+)\\] (?P<level>\\w+):"
+  }
+
+  stage.labels {
+    values = {
+      level = "",
+    }
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+// pgAudit logs (if enabled)
+loki.source.file "pgaudit" {
+  targets = [
+    {
+      __path__ = "/var/log/postgresql/pgaudit.log",
+      job = "pgaudit",
+      host = "{{ inventory_hostname }}",
+    },
+  ]
+  forward_to = [loki.write.default.receiver]
+}
 {% endif %}
 
 {% if 'build_servers' in group_names %}
-  # Docker container logs
-  - job_name: docker
-    docker_sd_configs:
-      - host: unix:///var/run/docker.sock
-        refresh_interval: 5s
-    relabel_configs:
-      - source_labels: ['__meta_docker_container_name']
-        regex: '/(.*)'
-        target_label: 'container'
-      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
-        target_label: 'service'
+// Docker container logs
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+  refresh_interval = "5s"
+}
+
+loki.source.docker "docker" {
+  host    = "unix:///var/run/docker.sock"
+  targets = discovery.docker.containers.targets
+
+  relabel_rules {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+
+  relabel_rules {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
 {% endif %}
 
-  # Security scan reports
-  - job_name: security_scans
-    static_configs:
-      - targets:
-          - localhost
-        labels:
-          job: security_scans
-          host: {{ inventory_hostname }}
-          __path__: /var/log/{openscap,lynis,trivy}/*.log
+// Security scan reports
+loki.source.file "security_scans" {
+  targets = [
+    {
+      __path__ = "/var/log/{openscap,lynis,trivy}/*.log",
+      job = "security_scans",
+      host = "{{ inventory_hostname }}",
+    },
+  ]
+  forward_to = [loki.write.default.receiver]
+}
 ```
 
 #### 4.7 Node Exporter Role
@@ -1237,11 +1327,230 @@ pg_locks:
         description: "Number of locks"
 ```
 
+#### 4.9 WireGuard VPN for Secure Monitoring Traffic
+
+**Purpose:** Establish encrypted site-to-site VPN tunnels between all hardened hosts and the central monitoring server to secure metrics and log transmission over untrusted networks.
+
+**Architecture:**
+```
+Central Monitoring Server (10.100.0.1/24)
+    ↕ WireGuard encrypted tunnel
+Hardened Host 1 (10.100.0.11/24)
+Hardened Host 2 (10.100.0.12/24)
+Hardened Host N (10.100.0.N/24)
+```
+
+**Benefits:**
+- All metrics (node_exporter, postgres_exporter) transmitted over encrypted channels
+- Log data sent to Loki protected from eavesdropping
+- No need to expose monitoring ports (9100, 9187, etc.) to public networks
+- Firewall rules simplified: only allow from WireGuard subnet
+
+**Role Implementation:**
+
+```yaml
+# roles/wireguard/tasks/main.yml
+---
+- name: Install WireGuard
+  package:
+    name: wireguard
+    state: present
+
+- name: Generate WireGuard private key
+  shell: wg genkey
+  register: wg_private_key
+  args:
+    creates: /etc/wireguard/private.key
+  no_log: true
+
+- name: Save private key
+  copy:
+    content: "{{ wg_private_key.stdout }}"
+    dest: /etc/wireguard/private.key
+    owner: root
+    group: root
+    mode: '0600'
+  when: wg_private_key.changed
+  no_log: true
+
+- name: Generate WireGuard public key
+  shell: cat /etc/wireguard/private.key | wg pubkey
+  register: wg_public_key
+  changed_when: false
+
+- name: Save public key
+  copy:
+    content: "{{ wg_public_key.stdout }}"
+    dest: /etc/wireguard/public.key
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Display public key for peer configuration
+  debug:
+    msg: "WireGuard public key for {{ inventory_hostname }}: {{ wg_public_key.stdout }}"
+
+- name: Configure WireGuard interface
+  template:
+    src: wg0.conf.j2
+    dest: /etc/wireguard/wg0.conf
+    owner: root
+    group: root
+    mode: '0600'
+  notify: Restart WireGuard
+
+- name: Enable IP forwarding (monitoring server only)
+  sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    state: present
+    reload: yes
+  when: "'monitoring_server' in group_names"
+
+- name: Enable and start WireGuard interface
+  systemd:
+    name: wg-quick@wg0
+    enabled: true
+    state: started
+
+- name: Allow WireGuard port through firewall
+  firewalld:
+    port: "{{ wireguard_port }}/udp"
+    permanent: true
+    state: enabled
+    immediate: true
+
+- name: Allow monitoring traffic from WireGuard subnet
+  firewalld:
+    rich_rule: "rule family='ipv4' source address='{{ wireguard_network }}' accept"
+    permanent: true
+    immediate: true
+    state: enabled
+```
+
+```jinja2
+# roles/wireguard/templates/wg0.conf.j2 (Monitoring Server)
+[Interface]
+Address = {{ wireguard_server_ip }}/24
+ListenPort = {{ wireguard_port | default(51820) }}
+PrivateKey = {{ lookup('file', '/etc/wireguard/private.key') }}
+
+# Post-up rules for NAT (if needed)
+PostUp = firewall-cmd --zone=public --add-masquerade
+PostDown = firewall-cmd --zone=public --remove-masquerade
+
+{% for host in groups['all'] %}
+{% if host != inventory_hostname %}
+# Peer: {{ host }}
+[Peer]
+PublicKey = {{ hostvars[host].wg_public_key.stdout }}
+AllowedIPs = {{ hostvars[host].wireguard_client_ip }}/32
+{% if hostvars[host].wireguard_endpoint is defined %}
+Endpoint = {{ hostvars[host].wireguard_endpoint }}:{{ wireguard_port | default(51820) }}
+{% endif %}
+PersistentKeepalive = 25
+
+{% endif %}
+{% endfor %}
+```
+
+```jinja2
+# roles/wireguard/templates/wg0.conf.j2 (Client Hosts)
+[Interface]
+Address = {{ wireguard_client_ip }}/24
+PrivateKey = {{ lookup('file', '/etc/wireguard/private.key') }}
+
+# Monitoring Server Peer
+[Peer]
+PublicKey = {{ hostvars[monitoring_server_host].wg_public_key.stdout }}
+AllowedIPs = {{ wireguard_network }}
+Endpoint = {{ monitoring_server_public_ip }}:{{ wireguard_port | default(51820) }}
+PersistentKeepalive = 25
+```
+
+**Inventory Configuration:**
+
+```yaml
+# inventory/group_vars/all.yml
+wireguard_enabled: true
+wireguard_port: 51820
+wireguard_network: "10.100.0.0/24"
+monitoring_server_host: "monitoring-01"
+monitoring_server_public_ip: "203.0.113.10"  # Replace with actual IP
+
+# WireGuard IP assignments
+wireguard_server_ip: "10.100.0.1"  # Monitoring server
+
+# inventory/host_vars/monitoring-01.yml
+wireguard_client_ip: "10.100.0.1"
+wireguard_is_server: true
+
+# inventory/host_vars/hardened-host-01.yml
+wireguard_client_ip: "10.100.0.11"
+wireguard_endpoint: "192.0.2.11"  # Public IP of this host
+
+# inventory/host_vars/hardened-host-02.yml
+wireguard_client_ip: "10.100.0.12"
+wireguard_endpoint: "192.0.2.12"
+```
+
+**Integration with Monitoring:**
+
+```yaml
+# Update monitoring configs to use WireGuard IPs
+# group_vars/all.yml
+loki_server: "{{ hostvars[monitoring_server_host].wireguard_client_ip }}"
+victoriametrics_server: "{{ hostvars[monitoring_server_host].wireguard_client_ip }}"
+
+# roles/alloy/templates/config.river.j2
+loki.write "default" {
+  endpoint {
+    url = "http://{{ loki_server }}:3100/loki/api/v1/push"
+  }
+}
+
+# roles/node_exporter/templates/node_exporter.service.j2
+ExecStart=/usr/local/bin/node_exporter \
+    --web.listen-address={{ wireguard_client_ip }}:9100 \
+    --collector.textfile.directory=/var/lib/node_exporter/textfile_collector
+```
+
+**Security Considerations:**
+
+1. **Firewall rules**: Only expose WireGuard port (51820/UDP) to public
+2. **Monitoring ports**: Bind exporters to WireGuard interface only
+3. **Key management**: Store keys securely, use Ansible Vault for automation
+4. **Peer verification**: Verify public keys before adding peers
+5. **Network isolation**: WireGuard subnet isolated from production networks
+
+**Alternatives:**
+
+| Solution | Setup Complexity | Management | Cost | Best For |
+|----------|------------------|------------|------|----------|
+| **WireGuard** (Recommended) | Low | Manual peer config | Free | Full control, performance |
+| **Tailscale** | Very Low | Central UI | Free <100 devices | Quick setup, easy management |
+| **Headscale** | Medium | Self-hosted control | Free | Control + convenience |
+| **NetBird** | Medium | Self-hosted or SaaS | Free (OSS) | Modern mesh networking |
+
+**Deployment:**
+
+```bash
+# Deploy WireGuard to all hosts
+ansible-playbook -i inventory/production hardened-linux/monitoring/wireguard-setup.yml
+
+# Verify connectivity
+ansible all -m shell -a "wg show"
+ansible all -m shell -a "ping -c 3 {{ hostvars[monitoring_server_host].wireguard_client_ip }}"
+
+# Test metrics collection over VPN
+curl http://10.100.0.11:9100/metrics  # From monitoring server
+```
+
 ---
 
 ### Phase 5: Central Monitoring Server (Week 4-5)
 
-#### 4.9 Monitoring Stack Playbook
+#### 4.10 Monitoring Stack Playbook
 
 ```yaml
 # playbooks/monitoring-stack.yml
@@ -1450,7 +1759,7 @@ scrape_configs:
 
 ### Phase 6: Alerting Rules (Week 5)
 
-#### 4.10 Security Alert Rules
+#### 4.11 Security Alert Rules
 
 ```yaml
 # templates/alertmanager/security_rules.yml
@@ -1998,7 +2307,7 @@ container_scanning:
 | 1-2 | Foundation | Base hardening, SSH, sysctl, auditd, AIDE |
 | 2-3 | Compliance | OpenSCAP, Lynis, Trivy installation and configuration |
 | 3 | Updates | Automatic security updates setup |
-| 3-4 | Logging | Promtail, log aggregation, central Loki setup |
+| 3-4 | Logging | Grafana Alloy, log aggregation, central Loki setup |
 | 4-5 | Monitoring | VictoriaMetrics, Grafana, exporters deployment |
 | 5 | Alerting | Alert rules, Alertmanager, notification channels |
 | 6 | Containers | Docker hardening, CI/CD pipeline security |

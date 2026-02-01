@@ -1,0 +1,191 @@
+---
+# Security Scan Scheduling Playbook
+# Configures automated security scans via cron/systemd timers
+# Run this AFTER installing security scanners
+
+- name: Schedule Automated Security Scans
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    # OpenSCAP CIS Benchmark Scan
+    openscap_scan_enabled: true
+    openscap_scan_schedule_weekday: "0"  # Sunday
+    openscap_scan_schedule_hour: "3"
+    openscap_scan_schedule_minute: "0"
+
+    # Lynis Security Audit
+    lynis_scan_enabled: true
+    lynis_scan_schedule_hour: "4"
+    lynis_scan_schedule_minute: "30"
+
+    # Trivy Filesystem Scan
+    trivy_fs_scan_enabled: true
+    trivy_fs_scan_schedule_hour: "2"
+    trivy_fs_scan_schedule_minute: "0"
+
+    # Trivy Docker Scan (build servers only)
+    trivy_docker_scan_enabled: true
+    trivy_docker_scan_schedule_hour: "2"
+    trivy_docker_scan_schedule_minute: "30"
+
+    # Email notifications
+    security_scan_email: "{{ aide_email | default('root@localhost') }}"
+
+  tasks:
+    # OpenSCAP Scheduled Scan
+    - name: Schedule weekly OpenSCAP CIS benchmark scan
+      cron:
+        name: "OpenSCAP CIS benchmark scan"
+        weekday: "{{ openscap_scan_schedule_weekday }}"
+        hour: "{{ openscap_scan_schedule_hour }}"
+        minute: "{{ openscap_scan_schedule_minute }}"
+        job: "/usr/local/bin/openscap-scan.sh >> /var/log/openscap/scan.log 2>&1"
+        user: root
+      when: openscap_scan_enabled
+
+    # Lynis Scheduled Scan
+    - name: Schedule daily Lynis security audit
+      cron:
+        name: "Lynis security audit"
+        hour: "{{ lynis_scan_schedule_hour }}"
+        minute: "{{ lynis_scan_schedule_minute }}"
+        job: "/usr/local/bin/lynis-scan.sh"
+        user: root
+      when: lynis_scan_enabled
+
+    # Trivy Filesystem Scan
+    - name: Schedule daily Trivy filesystem scan
+      cron:
+        name: "Trivy filesystem vulnerability scan"
+        hour: "{{ trivy_fs_scan_schedule_hour }}"
+        minute: "{{ trivy_fs_scan_schedule_minute }}"
+        job: "/usr/local/bin/trivy-scan.sh filesystem >> /var/log/trivy/scan.log 2>&1"
+        user: root
+      when: trivy_fs_scan_enabled
+
+    # Trivy Docker Scan (build servers only)
+    - name: Schedule daily Trivy Docker image scan
+      cron:
+        name: "Trivy Docker image scan"
+        hour: "{{ trivy_docker_scan_schedule_hour }}"
+        minute: "{{ trivy_docker_scan_schedule_minute }}"
+        job: "/usr/local/bin/trivy-scan.sh docker >> /var/log/trivy/docker-scan.log 2>&1"
+        user: root
+      when:
+        - trivy_docker_scan_enabled
+        - "'buildservers' in group_names"
+
+    # Alternative: Systemd Timers (more reliable than cron)
+    - name: Create OpenSCAP systemd timer
+      template:
+        src: ../templates/openscap-scan.timer.j2
+        dest: /etc/systemd/system/openscap-scan.timer
+        owner: root
+        group: root
+        mode: '0644'
+      when: openscap_scan_enabled and (use_systemd_timers | default(false))
+
+    - name: Create OpenSCAP systemd service
+      template:
+        src: ../templates/openscap-scan.service.j2
+        dest: /etc/systemd/system/openscap-scan.service
+        owner: root
+        group: root
+        mode: '0644'
+      when: openscap_scan_enabled and (use_systemd_timers | default(false))
+
+    - name: Enable OpenSCAP systemd timer
+      systemd:
+        name: openscap-scan.timer
+        enabled: yes
+        state: started
+        daemon_reload: yes
+      when: openscap_scan_enabled and (use_systemd_timers | default(false))
+
+    # Log rotation for scan results
+    - name: Configure log rotation for security scans
+      copy:
+        content: |
+          /var/log/openscap/*.log {
+              weekly
+              rotate 12
+              compress
+              delaycompress
+              missingok
+              notifempty
+              create 0640 root root
+          }
+
+          /var/log/lynis/*.log {
+              weekly
+              rotate 12
+              compress
+              delaycompress
+              missingok
+              notifempty
+              create 0640 root root
+          }
+
+          /var/log/trivy/*.log {
+              weekly
+              rotate 4
+              compress
+              delaycompress
+              missingok
+              notifempty
+              create 0640 root root
+          }
+        dest: /etc/logrotate.d/security-scans
+        owner: root
+        group: root
+        mode: '0644'
+
+  post_tasks:
+    - name: Verify scheduled scans
+      command: crontab -l -u root
+      register: cron_list
+      changed_when: false
+
+    - name: Display scan schedule
+      debug:
+        msg: |
+          ========================================
+          Automated Security Scans Configured!
+          ========================================
+
+          {% if openscap_scan_enabled %}
+          OpenSCAP CIS Benchmark:
+            Schedule: Weekly on {{ ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][openscap_scan_schedule_weekday|int] }} at {{ openscap_scan_schedule_hour }}:{{ '%02d' | format(openscap_scan_schedule_minute|int) }}
+            Reports: /var/log/openscap/
+          {% endif %}
+
+          {% if lynis_scan_enabled %}
+          Lynis Security Audit:
+            Schedule: Daily at {{ lynis_scan_schedule_hour }}:{{ '%02d' | format(lynis_scan_schedule_minute|int) }}
+            Reports: /var/log/lynis/
+          {% endif %}
+
+          {% if trivy_fs_scan_enabled %}
+          Trivy Filesystem Scan:
+            Schedule: Daily at {{ trivy_fs_scan_schedule_hour }}:{{ '%02d' | format(trivy_fs_scan_schedule_minute|int) }}
+            Reports: /var/log/trivy/
+          {% endif %}
+
+          {% if trivy_docker_scan_enabled and 'buildservers' in group_names %}
+          Trivy Docker Scan:
+            Schedule: Daily at {{ trivy_docker_scan_schedule_hour }}:{{ '%02d' | format(trivy_docker_scan_schedule_minute|int) }}
+            Reports: /var/log/trivy/
+          {% endif %}
+
+          Scan Results:
+          - Metrics exported to node_exporter textfile collector
+          - Logs forwarded to Loki via Alloy
+          - Email notifications to {{ security_scan_email }}
+
+          Next Steps:
+          1. Wait for first scheduled scan or run manually
+          2. Review scan results and address findings
+          3. Configure Grafana alerts for compliance score drops
+          4. Document remediation procedures

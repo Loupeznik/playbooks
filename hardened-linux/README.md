@@ -30,6 +30,8 @@ This collection provides security hardening for:
 2. **App Server** - Nginx, Docker, application-specific hardening
 3. **Database Server** - PostgreSQL hardening and security
 4. **Build Server** - CI/CD runner hardening (GitHub Actions, Azure DevOps)
+5. **Monitoring** - VictoriaMetrics, Grafana Loki, Alloy, exporters, WireGuard VPN
+6. **Compliance** - OpenSCAP, Lynis, Trivy security scanning
 
 ## SSH Port Configuration
 
@@ -81,12 +83,15 @@ If SSH fails to restart on AlmaLinux (SELinux issue):
 ansible/playbooks/hardened-linux/
 ├── README.md                          # This file
 ├── PRE_INSTALLATION.md                # Pre-installation guide
+├── QUICKSTART.md                      # Quick deployment guide
 ├── inventory/
 │   ├── hosts.yml                      # Inventory file
+│   ├── production.yml                 # Production inventory
+│   ├── staging.yml                    # Staging inventory
 │   └── group_vars/
 │       ├── all.yml                    # Common variables
-│       ├── ubuntu.yml                 # Ubuntu-specific variables
-│       ├── almalinux.yml              # AlmaLinux-specific variables
+│       ├── ubuntu_servers.yml         # Ubuntu-specific variables
+│       ├── almalinux_servers.yml      # AlmaLinux-specific variables
 │       ├── appservers.yml             # App server variables
 │       ├── dbservers.yml              # Database server variables
 │       └── buildservers.yml           # Build server variables
@@ -100,6 +105,22 @@ ansible/playbooks/hardened-linux/
 │   ├── 02-appserver.yml               # AlmaLinux app server setup
 │   ├── 03-dbserver.yml                # AlmaLinux database server setup
 │   └── 04-buildserver.yml             # AlmaLinux build server setup
+├── monitoring/                         # NEW: Monitoring & logging
+│   ├── 01-install-agents.yml          # Install node_exporter, Alloy, exporters
+│   ├── 02-setup-wireguard.yml         # WireGuard VPN for secure monitoring
+│   └── 03-central-stack.yml           # VictoriaMetrics + Loki + Grafana
+├── compliance/                         # NEW: Security scanning
+│   ├── 01-install-scanners.yml        # Install OpenSCAP, Lynis, Trivy
+│   └── 02-schedule-scans.yml          # Configure automated scans
+├── roles/                              # NEW: Reusable Ansible roles
+│   ├── node_exporter/                 # Prometheus node_exporter
+│   ├── alloy/                         # Grafana Alloy log shipper
+│   ├── postgres_exporter/             # PostgreSQL metrics
+│   ├── nginx_exporter/                # Nginx metrics
+│   ├── openscap/                      # CIS benchmark scanning
+│   ├── lynis/                         # Security auditing
+│   ├── trivy/                         # Vulnerability scanning
+│   └── wireguard/                     # VPN for monitoring traffic
 ├── templates/
 │   ├── sshd_config.j2                 # SSH daemon configuration
 │   ├── sysctl-hardening.conf.j2       # Kernel parameters
@@ -107,7 +128,10 @@ ansible/playbooks/hardened-linux/
 │   ├── nginx.conf.j2                  # Nginx configuration
 │   ├── postgresql.conf.j2             # PostgreSQL configuration
 │   ├── pg_hba.conf.j2                 # PostgreSQL access control
-│   └── fail2ban-jail.local.j2         # Fail2ban configuration
+│   ├── fail2ban-jail.local.j2         # Fail2ban configuration
+│   ├── victoriametrics-scrape.yml.j2  # VictoriaMetrics scrape config
+│   ├── loki-config.yml.j2             # Loki configuration
+│   └── grafana-datasources.yml.j2     # Grafana datasources
 └── files/
     ├── docker-daemon.json             # Docker daemon config
     └── aide-cron                      # AIDE scheduled check
@@ -117,17 +141,24 @@ ansible/playbooks/hardened-linux/
 
 ### On the Control Node (Your workstation)
 
-1. **Ansible Installation** (version 2.12+)
+1. **Python Virtual Environment Setup**
    ```bash
+   # Create virtual environment
+   python3 -m venv venv
+
+   # Activate virtual environment
+   source venv/bin/activate
+
+   # Install Ansible (version 2.12+)
+   pip install ansible
+
+   # Alternatively, install via system package manager
    # Ubuntu/Debian
    sudo apt update
    sudo apt install ansible
 
    # macOS
    brew install ansible
-
-   # Using pip
-   pip install ansible
    ```
 
 2. **SSH Key Pair**
@@ -138,6 +169,10 @@ ansible/playbooks/hardened-linux/
 
 3. **Additional Python Modules**
    ```bash
+   # Ensure your virtual environment is activated
+   source venv/bin/activate
+
+   # Install required Python modules
    pip install passlib  # For generating password hashes
    ```
 
@@ -229,6 +264,15 @@ ansible-playbook -i inventory/hosts.yml ubuntu/02-appserver.yml
 ansible-playbook -i inventory/hosts.yml ubuntu/03-dbserver.yml
 # OR
 ansible-playbook -i inventory/hosts.yml ubuntu/04-buildserver.yml
+
+# Optional: Setup monitoring (after basic hardening)
+ansible-playbook -i inventory/hosts.yml monitoring/02-setup-wireguard.yml
+ansible-playbook -i inventory/hosts.yml monitoring/01-install-agents.yml
+ansible-playbook -i inventory/hosts.yml monitoring/03-central-stack.yml --limit monitoring_server
+
+# Optional: Enable compliance scanning
+ansible-playbook -i inventory/hosts.yml compliance/01-install-scanners.yml
+ansible-playbook -i inventory/hosts.yml compliance/02-schedule-scans.yml
 ```
 
 **For AlmaLinux servers:**
@@ -243,6 +287,15 @@ ansible-playbook -i inventory/hosts.yml almalinux/02-appserver.yml
 ansible-playbook -i inventory/hosts.yml almalinux/03-dbserver.yml
 # OR
 ansible-playbook -i inventory/hosts.yml almalinux/04-buildserver.yml
+
+# Optional: Setup monitoring (after basic hardening)
+ansible-playbook -i inventory/hosts.yml monitoring/02-setup-wireguard.yml
+ansible-playbook -i inventory/hosts.yml monitoring/01-install-agents.yml
+ansible-playbook -i inventory/hosts.yml monitoring/03-central-stack.yml --limit monitoring_server
+
+# Optional: Enable compliance scanning
+ansible-playbook -i inventory/hosts.yml compliance/01-install-scanners.yml
+ansible-playbook -i inventory/hosts.yml compliance/02-schedule-scans.yml
 ```
 
 **Run in check mode (dry-run):**
@@ -345,6 +398,99 @@ ansible-playbook -i inventory/hosts.yml ubuntu/02-appserver.yml --limit app01.ex
 
 **Requires reboot:** No
 
+### monitoring/02-setup-wireguard.yml
+
+**Purpose:** Establish encrypted VPN tunnels for secure monitoring traffic
+
+**What it does:**
+- WireGuard installation and configuration
+- Site-to-site VPN between all hosts and monitoring server
+- Automatic key generation and exchange
+- Firewall rules for VPN traffic
+- IP forwarding configuration (monitoring server)
+- Connectivity verification
+
+**Estimated run time:** 5-8 minutes
+
+**Requires reboot:** No
+
+**Network:** Creates 10.100.0.0/24 VPN subnet
+
+### monitoring/01-install-agents.yml
+
+**Purpose:** Deploy monitoring and logging agents on all hosts
+
+**What it does:**
+- node_exporter installation (system metrics)
+- Grafana Alloy installation (log shipping to Loki)
+- postgres_exporter (database servers only)
+- nginx_exporter (application servers only)
+- Bind agents to WireGuard interface
+- Configure log collection and forwarding
+- Export security scan metrics
+
+**Estimated run time:** 8-12 minutes
+
+**Requires reboot:** No
+
+**Ports used:** 9100 (node_exporter), 9080 (Alloy), 9187 (postgres), 9113 (nginx)
+
+### monitoring/03-central-stack.yml
+
+**Purpose:** Deploy central monitoring infrastructure
+
+**What it does:**
+- VictoriaMetrics installation (metrics database)
+- Grafana Loki installation (log aggregation)
+- Grafana installation (visualization)
+- Alertmanager installation (alerting)
+- Datasource provisioning
+- Scrape configuration for all hosts
+- Service startup and verification
+
+**Estimated run time:** 15-20 minutes
+
+**Requires reboot:** No
+
+**Access URLs:** Grafana (3000), VictoriaMetrics (8428), Loki (3100), Alertmanager (9093)
+
+### compliance/01-install-scanners.yml
+
+**Purpose:** Deploy security scanning and compliance tools
+
+**What it does:**
+- OpenSCAP installation (CIS benchmark scanning)
+- Lynis installation (security auditing)
+- Trivy installation (vulnerability scanning)
+- Scan script deployment
+- Report directory creation
+- Integration with monitoring (metrics export)
+
+**Estimated run time:** 8-12 minutes
+
+**Requires reboot:** No
+
+**Report locations:** /var/log/openscap, /var/log/lynis, /var/log/trivy
+
+### compliance/02-schedule-scans.yml
+
+**Purpose:** Configure automated security scanning
+
+**What it does:**
+- Cron job configuration for automated scans
+- OpenSCAP weekly CIS benchmark scans
+- Lynis daily security audits
+- Trivy daily filesystem/Docker scans
+- Log rotation for scan results
+- Email notification setup
+- Systemd timer alternatives
+
+**Estimated run time:** 3-5 minutes
+
+**Requires reboot:** No
+
+**Scan schedules:** OpenSCAP (Sun 3am), Lynis (Daily 4:30am), Trivy (Daily 2am)
+
 ## Variables
 
 ### Common Variables (all.yml)
@@ -402,6 +548,49 @@ runner_user: runner
 runner_type: github  # or: azuredevops
 docker_prune_schedule: "0 2 * * *"
 build_cleanup_days: 7
+```
+
+### Monitoring Variables (group_vars/all.yml)
+
+```yaml
+# WireGuard VPN
+wireguard_enabled: true
+wireguard_port: 51820
+wireguard_network: "10.100.0.0/24"
+monitoring_server_host: "monitoring-01"
+
+# Per-host (in host_vars/)
+wireguard_client_ip: "10.100.0.11"  # Unique per host
+
+# Monitoring endpoints
+loki_server: "{{ hostvars[monitoring_server_host].wireguard_client_ip }}"
+victoriametrics_server: "{{ hostvars[monitoring_server_host].wireguard_client_ip }}"
+
+# Exporter versions
+node_exporter_version: "1.7.0"
+alloy_version: "1.0.0"
+postgres_exporter_version: "0.15.0"
+nginx_exporter_version: "0.11.0"
+```
+
+### Compliance Variables (group_vars/all.yml)
+
+```yaml
+# Security Scanning
+openscap_scan_enabled: true
+openscap_scan_schedule_weekday: "0"  # Sunday
+openscap_scan_schedule_hour: "3"
+
+lynis_scan_enabled: true
+lynis_scan_schedule_hour: "4"
+lynis_scan_schedule_minute: "30"
+
+trivy_scan_enabled: true
+trivy_fs_scan_schedule_hour: "2"
+trivy_docker_scan_enabled: true
+
+# Notifications
+security_scan_email: "security@example.com"
 ```
 
 ## Post-Installation Verification
@@ -490,6 +679,70 @@ sudo journalctl -u ssh | grep -i failed
 
 # AlmaLinux
 sudo grep "Failed password" /var/log/secure
+```
+
+### 8. Monitoring & Logging (if deployed)
+
+**WireGuard VPN:**
+```bash
+# Check WireGuard status
+sudo wg show
+
+# Test connectivity to monitoring server
+ping -c 3 10.100.0.1
+
+# Verify VPN interface
+ip addr show wg0
+```
+
+**Monitoring Agents:**
+```bash
+# Check exporter services
+sudo systemctl status node_exporter alloy
+
+# Test metrics endpoint (via WireGuard)
+curl -s http://10.100.0.11:9100/metrics | head
+
+# Check Alloy log shipping
+sudo journalctl -u alloy -n 50
+```
+
+**Central Monitoring Stack:**
+```bash
+# Access from monitoring server
+curl -s http://localhost:8428/api/v1/targets  # VictoriaMetrics targets
+curl -s http://localhost:3100/ready           # Loki readiness
+
+# Access Grafana
+# Navigate to http://monitoring-server:3000
+# Default: admin/admin (change immediately!)
+```
+
+### 9. Compliance Scanning (if deployed)
+
+**Check Scan Schedules:**
+```bash
+# View cron jobs
+sudo crontab -l | grep -E "openscap|lynis|trivy"
+```
+
+**Review Scan Results:**
+```bash
+# OpenSCAP CIS benchmark
+ls -lh /var/log/openscap/report-*.html
+sudo cat /var/log/openscap/scan.log | tail
+
+# Lynis hardening index
+sudo grep hardening_index /var/log/lynis/lynis-report-*.dat | tail -1
+
+# Trivy vulnerabilities
+sudo cat /var/log/trivy/scan.log | tail
+```
+
+**Check Metrics Export:**
+```bash
+# Scan metrics exported to node_exporter
+curl -s http://localhost:9100/metrics | grep -E "openscap|lynis|trivy"
 ```
 
 ## Troubleshooting
@@ -614,19 +867,166 @@ sudo grep "Failed password" /var/log/secure
    psql -h db_server_ip -U username -d database
    ```
 
+### WireGuard VPN Not Working
+
+**Problem:** Cannot connect via WireGuard VPN
+
+**Solutions:**
+1. Check WireGuard service:
+   ```bash
+   sudo systemctl status wg-quick@wg0
+   sudo wg show
+   ```
+
+2. Verify firewall allows UDP/51820:
+   ```bash
+   sudo firewall-cmd --list-ports | grep 51820
+   ```
+
+3. Check peer configuration:
+   ```bash
+   sudo cat /etc/wireguard/wg0.conf
+   ```
+
+4. Test connectivity:
+   ```bash
+   ping -c 3 10.100.0.1  # Monitoring server VPN IP
+   ```
+
+5. Review logs:
+   ```bash
+   sudo journalctl -u wg-quick@wg0 -n 50
+   ```
+
+### Monitoring Agents Not Reporting
+
+**Problem:** Metrics not appearing in VictoriaMetrics
+
+**Solutions:**
+1. Check exporter is running:
+   ```bash
+   sudo systemctl status node_exporter
+   curl http://localhost:9100/metrics
+   ```
+
+2. Verify WireGuard connectivity:
+   ```bash
+   ping -c 3 {{ monitoring_server_wireguard_ip }}
+   ```
+
+3. Check VictoriaMetrics scrape targets (from monitoring server):
+   ```bash
+   curl http://localhost:8428/api/v1/targets
+   ```
+
+4. Review exporter logs:
+   ```bash
+   sudo journalctl -u node_exporter -n 50
+   ```
+
+### Logs Not Appearing in Loki
+
+**Problem:** Logs not being forwarded to Loki
+
+**Solutions:**
+1. Check Alloy service:
+   ```bash
+   sudo systemctl status alloy
+   sudo journalctl -u alloy -n 50
+   ```
+
+2. Verify Alloy configuration:
+   ```bash
+   sudo alloy fmt /etc/alloy/config.river --check
+   ```
+
+3. Test Loki endpoint (from client):
+   ```bash
+   curl -v http://{{ loki_server }}:3100/ready
+   ```
+
+4. Check Loki is receiving logs (monitoring server):
+   ```bash
+   curl -G -s "http://localhost:3100/loki/api/v1/query" --data-urlencode 'query={job="syslog"}'
+   ```
+
+### Compliance Scans Not Running
+
+**Problem:** Automated scans not executing
+
+**Solutions:**
+1. Verify cron jobs exist:
+   ```bash
+   sudo crontab -l | grep -E "openscap|lynis|trivy"
+   ```
+
+2. Check scan script permissions:
+   ```bash
+   ls -l /usr/local/bin/*-scan.sh
+   sudo chmod +x /usr/local/bin/*-scan.sh
+   ```
+
+3. Run scan manually to test:
+   ```bash
+   sudo /usr/local/bin/openscap-scan.sh
+   sudo /usr/local/bin/lynis-scan.sh
+   sudo /usr/local/bin/trivy-scan.sh filesystem
+   ```
+
+4. Check cron execution logs:
+   ```bash
+   sudo journalctl -t CRON | grep -E "openscap|lynis|trivy"
+   ```
+
+### High Resource Usage from Alloy
+
+**Problem:** Alloy consuming excessive CPU/memory
+
+**Solutions:**
+1. Monitor resource usage:
+   ```bash
+   ps aux | grep alloy
+   ```
+
+2. Reduce log collection scope in `/etc/alloy/config.river`:
+   - Decrease file watch frequency
+   - Limit journald max_age
+   - Filter out verbose logs
+
+3. Expected resource usage:
+   - CPU: 1-2 cores (10x more than Promtail)
+   - Memory: 300Mi-1GiB (2-6x more than Promtail)
+
 ## Additional Resources
 
+### Internal Documentation
+- [Security Posture Plan](../security-posture-plan.md) - Comprehensive security implementation guide with monitoring, compliance, and VPN setup
+
+### External Resources
 - [CIS Benchmarks](https://www.cisecurity.org/cis-benchmarks/)
 - [NIST Security Guidelines](https://www.nist.gov/cybersecurity)
 - [Ansible Documentation](https://docs.ansible.com/)
 - [Ubuntu Security](https://ubuntu.com/security)
 - [AlmaLinux Security](https://wiki.almalinux.org/documentation/security.html)
 
+### Monitoring & Logging
+- [VictoriaMetrics Documentation](https://docs.victoriametrics.com/)
+- [Grafana Alloy Documentation](https://grafana.com/docs/alloy/latest/)
+- [Grafana Loki Documentation](https://grafana.com/docs/loki/latest/)
+- [WireGuard Documentation](https://www.wireguard.com/quickstart/)
+
+### Compliance Tools
+- [OpenSCAP User Manual](https://www.open-scap.org/resources/documentation/)
+- [Lynis Documentation](https://cisofy.com/documentation/lynis/)
+- [Trivy Documentation](https://aquasecurity.github.io/trivy/)
+
 ## Maintenance
 
 ### Regular Tasks
 
-1. **Review logs weekly:**
+#### Security Checks (Weekly)
+
+1. **Review logs:**
    ```bash
    sudo journalctl -p err -S today
    ```
@@ -641,12 +1041,54 @@ sudo grep "Failed password" /var/log/secure
    sudo fail2ban-client status sshd
    ```
 
-4. **Update playbooks and re-run monthly** to ensure compliance
-
-5. **Review audit logs:**
+4. **Review audit logs:**
    ```bash
    sudo ausearch -ts today -i
    ```
+
+#### Monitoring & Compliance (Weekly)
+
+5. **Review compliance scan results:**
+   ```bash
+   # Check OpenSCAP scores
+   ls -lt /var/log/openscap/report-*.html | head -3
+
+   # Check Lynis hardening index
+   grep hardening_index /var/log/lynis/lynis-report-*.dat | tail -5
+
+   # Review critical vulnerabilities
+   grep -i critical /var/log/trivy/scan.log | tail -20
+   ```
+
+6. **Verify monitoring health:**
+   ```bash
+   # Check WireGuard connectivity
+   sudo wg show
+
+   # Verify exporters are running
+   sudo systemctl status node_exporter alloy
+
+   # Check metrics availability
+   curl -s http://localhost:9100/metrics | head
+   ```
+
+7. **Review Grafana dashboards** for anomalies and alerts
+
+#### Updates (Monthly)
+
+8. **Update playbooks and re-run** to ensure compliance:
+   ```bash
+   git pull
+   ansible-playbook -i inventory/hosts.yml ubuntu/01-basic-setup.yml --check
+   ```
+
+9. **Update security scanner databases:**
+   ```bash
+   sudo trivy image --download-db-only
+   sudo lynis update info
+   ```
+
+10. **Review and update firewall rules** based on traffic patterns
 
 ## Support and Contributions
 

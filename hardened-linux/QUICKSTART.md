@@ -11,11 +11,20 @@ Get your hardened Linux servers up and running in minutes!
 
 ## 5-Minute Setup
 
-### 1. Install Ansible Collections
+### 1. Set Up Python Virtual Environment
 
 ```bash
+# Create virtual environment
+python3 -m venv venv
+
+# Activate virtual environment
+source venv/bin/activate
+
+# Install required Python packages
+pip install ansible passlib
+
+# Install Ansible collections
 ansible-galaxy collection install community.general ansible.posix community.postgresql community.docker
-pip3 install passlib
 ```
 
 ### 2. Generate SSH Key (if needed)

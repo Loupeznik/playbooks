@@ -1,0 +1,84 @@
+---
+# Compliance & Security Scanners Installation Playbook
+# Installs OpenSCAP, Lynis, and Trivy for security scanning
+# Run this AFTER basic hardening is complete
+
+- name: Install Security & Compliance Scanners
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    openscap_enabled: true
+    lynis_enabled: true
+    trivy_enabled: true
+
+  pre_tasks:
+    - name: Verify basic hardening is complete
+      stat:
+        path: /etc/sysctl.d/99-hardening.conf
+      register: basic_hardening
+      failed_when: not basic_hardening.stat.exists
+
+  tasks:
+    # OpenSCAP Installation
+    - name: Install OpenSCAP for CIS benchmark scanning
+      include_role:
+        name: openscap
+      when: openscap_enabled
+
+    # Lynis Installation
+    - name: Install Lynis for security auditing
+      include_role:
+        name: lynis
+      when: lynis_enabled
+
+    # Trivy Installation
+    - name: Install Trivy for vulnerability scanning
+      include_role:
+        name: trivy
+      when: trivy_enabled
+
+  post_tasks:
+    - name: Create security scan reports directory
+      file:
+        path: /var/log/security-scans
+        state: directory
+        owner: root
+        group: root
+        mode: '0750'
+
+    - name: Display installation summary
+      debug:
+        msg: |
+          ========================================
+          Security Scanners Installed!
+          ========================================
+
+          {% if openscap_enabled %}
+          OpenSCAP:
+            - CIS benchmark scanning
+            - Reports: /var/log/openscap/
+            - Manual scan: /usr/local/bin/openscap-scan.sh
+          {% endif %}
+
+          {% if lynis_enabled %}
+          Lynis:
+            - System security auditing
+            - Reports: /var/log/lynis/
+            - Manual scan: /usr/local/bin/lynis-scan.sh
+          {% endif %}
+
+          {% if trivy_enabled %}
+          Trivy:
+            - Filesystem vulnerability scanning
+            - Docker image scanning (if Docker installed)
+            - Reports: /var/log/trivy/
+            - Manual scan: /usr/local/bin/trivy-scan.sh
+          {% endif %}
+
+          Next Steps:
+          1. Run compliance/02-schedule-scans.yml to configure automated scanning
+          2. Review initial scan results
+          3. Address critical findings
+          4. Configure scan result forwarding to SIEM/logging

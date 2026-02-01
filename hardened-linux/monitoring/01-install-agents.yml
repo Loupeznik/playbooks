@@ -1,0 +1,73 @@
+---
+# Monitoring Agents Installation Playbook
+# Installs node_exporter, Grafana Alloy, and service-specific exporters
+# Run this AFTER basic hardening is complete
+
+- name: Install Monitoring Agents - Common (All Hosts)
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    node_exporter_version: "1.7.0"
+    alloy_version: "1.0.0"
+
+  tasks:
+    - name: Verify basic hardening is complete
+      stat:
+        path: /etc/sysctl.d/99-hardening.conf
+      register: basic_hardening
+      failed_when: not basic_hardening.stat.exists
+
+    - name: Install node_exporter
+      include_role:
+        name: node_exporter
+
+    - name: Install Grafana Alloy for log shipping
+      include_role:
+        name: alloy
+
+    - name: Display completion message
+      debug:
+        msg: |
+          ========================================
+          Monitoring Agents Installed!
+          ========================================
+          - node_exporter running on port 9100
+          - Grafana Alloy running on port 9080
+          - Logs shipping to {{ loki_server }}:3100
+          - Metrics available for scraping
+
+- name: Install PostgreSQL Exporter (Database Servers)
+  hosts: dbservers
+  become: true
+  gather_facts: true
+
+  vars:
+    postgres_exporter_version: "0.15.0"
+
+  tasks:
+    - name: Install postgres_exporter
+      include_role:
+        name: postgres_exporter
+
+    - name: Display DB exporter info
+      debug:
+        msg: "PostgreSQL exporter running on port 9187"
+
+- name: Install Nginx Exporter (Application Servers)
+  hosts: appservers
+  become: true
+  gather_facts: true
+
+  vars:
+    nginx_exporter_version: "0.11.0"
+
+  tasks:
+    - name: Install nginx_exporter
+      include_role:
+        name: nginx_exporter
+
+    - name: Display nginx exporter info
+      debug:
+        msg: "Nginx exporter running on port 9113"
