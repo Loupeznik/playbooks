@@ -7,12 +7,12 @@
   vars:
     github_url: "{{ github_repo_url }}"
     github_token: "{{ github_runner_token }}"
-    runner_name: "{{ github_runner_name | default(ansible_hostname) }}"
+    runner_name: "{{ github_runner_name | default(ansible_facts['hostname']) }}"
     runner_arch: "{{ github_runner_arch | default('x64') }}"
     runner_labels: "{{ github_runner_labels | default('self-hosted,Linux,' + (runner_arch | upper if runner_arch == 'x64' else 'ARM64')) }}"
     runner_user: "{{ github_runner_user | default('ghrunner') }}"
     runner_version: "2.328.0"
-    runner_dir: "{{ github_runner_dir | default('/opt/ci/gh/' + (github_runner_name | default(ansible_hostname))) }}"
+    runner_dir: "{{ github_runner_dir | default('/opt/ci/gh/' + runner_name) }}"
     runner_add_to_docker_group: "{{ github_runner_add_to_docker_group | default(true) }}"
 
   tasks:

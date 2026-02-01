@@ -5,9 +5,9 @@
   become_user: root
 
   vars:
-    runner_name: "{{ github_runner_name | default(ansible_hostname) }}"
+    runner_name: "{{ github_runner_name | default(ansible_facts['hostname']) }}"
     runner_user: "{{ github_runner_user | default('ghrunner') }}"
-    runner_dir: "{{ github_runner_dir | default('/opt/ci/gh/' + (github_runner_name | default(ansible_hostname))) }}"
+    runner_dir: "{{ github_runner_dir | default('/opt/ci/gh/' + runner_name) }}"
     remove_user: "{{ github_remove_user | default(false) }}"
 
   tasks:

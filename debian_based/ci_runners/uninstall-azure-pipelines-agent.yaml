@@ -5,9 +5,9 @@
   become_user: root
 
   vars:
-    agent_name: "{{ azure_agent_name | default(ansible_hostname) }}"
+    agent_name: "{{ azure_agent_name | default(ansible_facts['hostname']) }}"
     agent_user: "{{ azure_agent_user | default('azpagent') }}"
-    agent_dir: "{{ azure_agent_dir | default('/opt/ci/azp/' + (azure_agent_name | default(ansible_hostname))) }}"
+    agent_dir: "{{ azure_agent_dir | default('/opt/ci/azp/' + agent_name) }}"
     remove_user: "{{ azure_remove_user | default(false) }}"
 
   tasks:
